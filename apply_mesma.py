@@ -14,7 +14,7 @@ import numpy as np
 import gdal
 from tqdm import tqdm
 import multiprocessing
-from build_endmember_library import SpectralLibrary, remove_wavelength_region
+from build_endmember_library import SpectralLibrary, remove_wavelength_regions
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -82,7 +82,7 @@ args = parser.parse_args()
 def get_refl_wavelengths(raster_file):
     ds = gdal.Open(raster_file, gdal.GA_ReadOnly)
     metadata = ds.GetMetadata()
-    wavelengths = np.array(float(metadata['Band_' + str(x)]) for x in range(1,ds.RasterCount+1))
+    wavelengths = np.array([float(metadata['Band_' + str(x)]) for x in range(1,ds.RasterCount+1)])
     return wavelengths
 
 
@@ -94,6 +94,7 @@ from vipertools.scripts import mesma
 # Remove hardcoding once libary setup is complete
 header = list(pd.read_csv('data/basic_endmember_library.csv'))
 header.pop(0)
+header = np.array(header)
 endmember_library = SpectralLibrary('data/basic_endmember_library.csv', 'Class',
                                   ['NPV', 'PV', 'SOIL'], header, header.astype(np.float32))
 
@@ -106,8 +107,7 @@ endmember_library.interpolate_library_to_new_wavelengths(refl_file_bands)
 
 bad_wv_regions = [[0,440],[1330,1490],[1170,2050],[2440,2880]]
 
-for bwv in bad_wv_regions:
-    endmember_library.remove_wavelength_region_inplace(bwv[0],bwv[1])
+endmember_library.remove_wavelength_region_inplace(bad_wv_regions)
 
 n_classes = len(np.unique(endmember_library.classes))
 
@@ -157,7 +157,7 @@ for _n in range(len(output_files)):
 # Define a function to run Mesma on one line of data
 def mesma_line(line):
     img_dat = dataset.ReadAsArray(0,int(line),int(x_len),1).astype(np.float32)
-    img_dat, refl_file_bands_tmp = remove_wavelength_region(img_dat, refl_file_bands.copy(), bad_wv_regions)
+    img_dat, refl_file_bands_tmp = remove_wavelength_regions(img_dat, refl_file_bands.copy(), bad_wv_regions)
 
     img_dat = img_dat
     img_dat[img_dat > 1] = -9999
