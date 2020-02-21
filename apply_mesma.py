@@ -14,6 +14,7 @@ import numpy as np
 import gdal
 from tqdm import tqdm
 import multiprocessing
+from build_endmember_library import SpectralLibrary, remove_wavelength_region
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -77,77 +78,43 @@ script_inputs = [
 args = parser.parse_args()
 
 
+
+def get_refl_wavelengths(raster_file):
+    ds = gdal.Open(raster_file, gdal.GA_ReadOnly)
+    metadata = ds.GetMetadata()
+    wavelengths = np.array(float(metadata['Band_' + str(x)]) for x in range(1,ds.RasterCount+1))
+    return wavelengths
+
+
+
 sys.path.extend([args.vipertools_base, os.path.join(args.vipertools_base, 'vipertools')])
 from vipertools.scripts import mesma
 
-# Steal from vipertools.io.imports because we want to avoid any library that requires QGIS
-def detect_reflectance_scale_factor(array):
-    """ Determine the reflectance scale factor [1, 1000 or 10 000] by looking for the largest value in the array.
-    :param array: the array for which the reflectance scale factor is to be found
-    :return: the reflectance scale factor [int]
-    """
-    limit = np.nanmax(array)
-    if limit < 1:
-        return 1
-    if limit < 1000:
-        return 1000
-    else:
-        return 10000
 
+# Remove hardcoding once libary setup is complete
+header = list(pd.read_csv('data/basic_endmember_library.csv'))
+header.pop(0)
+endmember_library = SpectralLibrary('data/basic_endmember_library.csv', 'Class',
+                                  ['NPV', 'PV', 'SOIL'], header, header.astype(np.float32))
 
-spec_lib_df = pd.read_csv(args.spectral_library_csv, sep='\t')
-spectral_cols = [x for x in list(spec_lib_df) if x[0] == 'b' and 'Unknown' in x] # TODO: Update to be an argument
-import ipdb; ipdb.set_trace()
-spectral_library = np.array(spec_lib_df[spectral_cols])
+endmember_library.load_data()
+endmember_library.filter_by_class()
+endmember_library.scale_library(10000.)
 
-######## Identify valid bands
-if (args.autoid_good_bands):
-    if (args.good_bands_spectral_library_header is None):
-        spectral_library_header = os.path.splitext(args.spectral_library_csv)[0] + '.hdr'
-    else:
-        spectral_library_header = args.good_bands_spectral_library_header
+refl_file_bands = get_refl_wavelengths(args.reflectance_input_file)
+endmember_library.interpolate_library_to_new_wavelengths(refl_file_bands)
 
-    if (args.good_bands_image_header is None):
-        image_header = os.path.splitext(args.reflectance_input_file)[0] + '.hdr'
-        if (os.path.isfile(image_header) is False):
-            image_header = args.reflectance_input_file + '.hdr'
-    else:
-        image_header = args.good_bands_image_header
+bad_wv_regions = [[0,440],[1330,1490],[1170,2050],[2440,2880]]
 
-    sl_bands = open(spectral_library_header, 'r').read().split('}')
-    refl_file_bands = open(image_header, 'r').read().split('}')
+for bwv in bad_wv_regions:
+    endmember_library.remove_wavelength_region_inplace(bwv[0],bwv[1])
 
-    sl_ind = [x for x in range(len(sl_bands)) if 'wavelength = ' in sl_bands[x]][0]
-    if_ind = [x for x in range(len(refl_file_bands)) if 'wavelength = ' in refl_file_bands[x]][0]
-
-    sl_bands = np.array(
-        sl_bands[sl_ind].replace('\n', '').replace('wavelength = { ', '').replace(' ', '').split(',')).astype(float)
-    refl_file_bands = np.array(
-        refl_file_bands[if_ind].replace('\n', '').replace('wavelength = { ', '').replace(' ', '').split(',')).astype(
-        float)
-
-    good_bands = np.array(
-        [x for x in range(len(refl_file_bands)) if np.any(np.abs(sl_bands - refl_file_bands[x]) < args.band_id_tolerance)])
-else:
-    good_bands = np.arange(spectral_library.shape[1])
-
-## FIX THIS
-#full_bad_bands = np.zeros(425).astype(bool)
-#full_bad_bands[:10] = True
-#full_bad_bands[194:207] = True
-#full_bad_bands[286:329] = True
-#full_bad_bands[419:] = True
-#good_bands = np.logical_not(full_bad_bands)
-
-# Grab spectral library class data for mesma
-class_list = np.array(spec_lib_df[args.spectral_class_name],dtype=str)
-class_list = np.asarray([x.lower() for x in class_list])
-unique_classes = np.unique(class_list)
-n_classes = len(unique_classes)
+n_classes = len(np.unique(endmember_library.classes))
 
 # construct basic mesma model object
 models_object = mesma.MesmaModels()
-models_object.setup(class_list)
+models_object.setup(endmember_library.classes)
+
 require_list = [2,3]
 for level in require_list:
     if level not in args.complexity_level:
@@ -168,21 +135,7 @@ x_len = int(dataset.RasterXSize)
 y_len = int(dataset.RasterYSize)
 
 
-
-# If necessary, determine the reflectance scaling by passing through the image
-if (args.reflectance_scale is None):
-    img_scale = 1
-    #for l in tqdm(np.arange(0,y_len).astype(int),ncols=80):
-    #    img_dat = dataset.ReadAsArray(0,int(l),int(x_len),1)
-    #    img_scale = max(img_scale, detect_reflectance_scale_factor(img_dat))
-else:
-    img_scale = args.reflectance_scale
-
-spectral_library = spectral_library / detect_reflectance_scale_factor(spectral_library)
-spectral_library = np.transpose(spectral_library)
-
-import ipdb; ipdb.set_trace()
-
+#spectral_library = np.transpose(spectral_library)
 
 ### Set up output files
 n_fraction_bands = 8
@@ -203,18 +156,18 @@ for _n in range(len(output_files)):
 
 # Define a function to run Mesma on one line of data
 def mesma_line(line):
-    line = 1000
-    import ipdb; ipdb.set_trace()
-    img_dat = dataset.ReadAsArray(0,int(line),int(x_len),1)[good_bands,...].astype(np.float32)
-    img_dat = img_dat / img_scale
+    img_dat = dataset.ReadAsArray(0,int(line),int(x_len),1).astype(np.float32)
+    img_dat, refl_file_bands_tmp = remove_wavelength_region(img_dat, refl_file_bands.copy(), bad_wv_regions)
+
+    img_dat = img_dat
     img_dat[img_dat > 1] = -9999
     core = mesma.MesmaCore()
     mesma_results = core.execute(img_dat,
-                                 spectral_library,
+                                 endmember_library.spectra.T,
                                  look_up_table=models_object.return_look_up_table(),
                                  em_per_class=models_object.em_per_class,
                                  )
-    import ipdb; ipdb.set_trace()
+
     for _n in range(len(output_files)):
         lr = mesma_results[_n]
         if (len(lr.shape) == 2):
@@ -230,17 +183,17 @@ progress_bar = tqdm(total=y_len, ncols=80)
 def progress_update(*a):
     progress_bar.update()
 
-#pool = multiprocessing.Pool(processes=args.n_cores)
-#results = []
-#for l in np.arange(0, y_len).astype(int):
-#    results.append(pool.apply_async(mesma_line, args=(l,), callback=progress_update))
-#results = [p.get() for p in results]
-#pool.close()
-#pool.join()
+pool = multiprocessing.Pool(processes=args.n_cores)
+results = []
+for l in np.arange(0, y_len).astype(int):
+    results.append(pool.apply_async(mesma_line, args=(l,), callback=progress_update))
+results = [p.get() for p in results]
+pool.close()
+pool.join()
 
 
-for l in tqdm(np.arange(0,y_len).astype(int)):
-    mesma_line(l)
+#for l in tqdm(np.arange(0,y_len).astype(int)):
+#    mesma_line(l)
 
 
 
