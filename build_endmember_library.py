@@ -5,8 +5,9 @@ specific endmember generation process.  Steps:
 
 1) Filter in situ spectra to what is needed.
 2) Use the Endmember average RMSE (EAR) tool from MESMA to select representative spectra.
-3) Convolve spectra to the appropriate spectral resolution.
-4) Combine the selected spectra together into a single, formatted output file.
+3) Combine the selected spectra together into a single, formatted output file.
+
+Spectral will be convolved to match the 
 
 Written by: Philip G. Brodrick
 """
@@ -14,14 +15,8 @@ Written by: Philip G. Brodrick
 import numpy as np
 import pandas as pd
 import sys, os
-
-
-vipertools_base = '/home/brodrick/src/vipertools-3.0.8/'
-sys.path.extend([vipertools_base, os.path.join(vipertools_base, 'vipertools')])
-from vipertools.scripts.square_array import SquareArray
-from vipertools.scripts.ear_masa_cob import EarMasaCob
-
-#sys.path.extend(['../vipertools-3.3.0/','../vipertools-3.3.0/vipertools'])
+from square_array import SquareArray
+from ear_masa_cob import EarMasaCob
 
 def get_good_bands_mask(wavelengths, wavelength_pairs):
     good_bands = np.ones(len(wavelengths)).astype(bool)
@@ -111,28 +106,25 @@ class SpectralLibrary():
         self.spectra = self.spectra / np.sqrt(np.nanmean(np.power(self.spectra,2),axis=1))[:,np.newaxis]
 
 
-
 bad_wv_regions = [[0,440],[1310,1490],[1770,2050],[2440,2880]]
 spectra_per_class = 6
 
-
+# Create list of all spectral libraries to use
 libraries = []
 libraries.append(SpectralLibrary('data/urbanspectraandmeta.csv', 'Level_2',
                                   np.arange(350, 2499, 2).astype(int).astype(str),
                                   np.arange(350, 2499, 2).astype(np.float32),
                                   scale_factor=10000.))
-                                  #,['NPV', 'PV', 'SOIL','Paved','Roof','Soil']
 
 
-## Open and filter spectral libraries
+# Open and filter spectral libraries
 for _f in range(len(libraries)):
     libraries[_f].load_data()
-    #libraries[_f].filter_by_class()
+    libraries[_f].filter_by_class()
     libraries[_f].scale_library()
     libraries[_f].remove_wavelength_region_inplace(bad_wv_regions,set_as_nans=True)
 
-
-## Now run EAR on each library (independently)
+# Now run EAR on each library (independently), and assemble the desired number of classes
 ear_masa_cobs = []
 for _f in range(len(libraries)):
 
@@ -151,7 +143,6 @@ for _f in range(len(libraries)):
     out_df['OutCOB'] = emc[3]
     out_df['COBI'] = emc[4]
 
-
     good_data = np.zeros(libraries[_f].spectra.shape[0]).astype(bool)
     for cla in libraries[_f].class_valid_keys:
         subset = libraries[_f].classes == cla
@@ -162,12 +153,8 @@ for _f in range(len(libraries)):
 
         good_data[order[:spectra_per_class]] = True
 
-
-    #import ipdb; ipdb.set_trace()
-    print(len(out_df))
     out_df = out_df.loc[good_data,:]
     out_df.to_csv(os.path.splitext(libraries[_f].file_name)[0] + '_endmember.csv', index=False)
-    print(len(out_df))
 
 
 
