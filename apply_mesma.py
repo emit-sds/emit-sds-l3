@@ -14,7 +14,8 @@ import numpy as np
 import gdal
 from tqdm import tqdm
 import multiprocessing
-from build_endmember_library import SpectralLibrary, remove_wavelength_regions
+from build_endmember_library import SpectralLibrary, get_good_bands_mask, bad_wv_regions
+import matplotlib.pyplot as plt
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -24,43 +25,11 @@ parser = argparse.ArgumentParser(description='Execute MESMA in parallel over a B
 parser.add_argument('spectral_library_csv') #/Users/brodrick/Projects/EMIT/Vegetation/mesma_test_data/spectral_set_emc.csv
 parser.add_argument('reflectance_input_file') #tutorial_data_set_santa_barbara/010614r4_4-5.rfl.reg
 parser.add_argument('output_file_base')
-parser.add_argument('-spectral_class_name',default='class')
 parser.add_argument('-n_cores',type=int,default=1)
-parser.add_argument('-complexity_level', metavar='\b', nargs='+', type=int, default=[2, 3],
+parser.add_argument('-complexity_level', metavar='\b', nargs='+', type=int, default=[3, 4],
                     help='the complexity levels for unmixing. e.g. 2 3 4 for 2-, 3- and 4-EM models (default: 2 3)')
-parser.add_argument('-reflectance_scale', metavar='\b', type=int,
-                    help='image reflectance scale factor (default: derived from data as 1, 1 000 or 10 000)')
 parser.add_argument('-vipertools_base',type=str,help='point to the base of the vipertools package, as the pip install is broken')
 
-# constraints
-parser.add_argument('-u', '--unconstrained', action='store_true', default=False,
-                    help='run mesma without constraints (default off)')
-parser.add_argument('--min-fraction', metavar='\b', type=float, default=-0.05,
-                    help='minimum allowable endmember fraction (default -0.05), use -9999 to set no constraint')
-parser.add_argument('--max-fraction', metavar='\b', type=float, default=1.05,
-                    help='maximum allowable endmember fraction (default 1.05), use -9999 to set no constraint')
-parser.add_argument('--min-shade-fraction', metavar='\b', type=float, default=0.00,
-                    help='minimum allowable shade fraction (default 0.00), use -9999 to set no constraint')
-parser.add_argument('--max-shade-fraction', metavar='\b', type=float, default=0.80,
-                    help='maximum allowable shade fraction (default 0.80), use -9999 to set no constraint')
-parser.add_argument('--max-rmse', metavar='\b', type=float, default=0.025,
-                    help='maximum allowable RMSE (default 0.025), use -9999 to set no constraint')
-parser.add_argument('--residual-constraint', action='store_true', default=False,
-                    help='use a residual constraint (default off)')
-parser.add_argument('--residual-constraint-values', metavar='\b', type=float, nargs="+", default=(0.025, 7),
-                    help='two values (residual threshold, number of bands): the number of consecutive bands that '
-                         'the residual values are allowed to exceed the given threshold (default: 0.025 7)')
-
-# manage good bands
-parser.add_argument('-autoid_good_bands', type=bool,default=True, help='flag to auto ID and discard bands that are '
-                    'not in the spectral library but are in the reflectance image')
-parser.add_argument('-good_bands_spectral_library_header',type=str,
-                    help='use a custom spectral library header to ID good bands, defaults to spectral_library_csv with'
-                    ' .hdr extention')
-parser.add_argument('-good_bands_image_header',type=str,
-                    help='use a custom image header to ID good bands, defaults to reflectance_input_file with'
-                         ' .hdr extention')
-parser.add_argument('-band_id_tolerance', type=float, default=3, help='tolerance for identification of relevant bands, in nm')
 
 """
 Example implementation
@@ -87,27 +56,37 @@ def get_refl_wavelengths(raster_file):
 
 
 
-sys.path.extend([args.vipertools_base, os.path.join(args.vipertools_base, 'vipertools')])
-from vipertools.scripts import mesma
+#sys.path.extend([args.vipertools_base, os.path.join(args.vipertools_base, 'vipertools')])
+#from vipertools.scripts import mesma
+import mesma
 
 
 # Remove hardcoding once libary setup is complete
 header = list(pd.read_csv('data/basic_endmember_library.csv'))
 header.pop(0)
 header = np.array(header)
-endmember_library = SpectralLibrary('data/basic_endmember_library.csv', 'Class',
-                                  ['NPV', 'PV', 'SOIL'], header, header.astype(np.float32))
+#endmember_library = SpectralLibrary('data/basic_endmember_library.csv', 'Class',
+#                                  ['NPV', 'PV', 'SOIL'], header, header.astype(np.float32))
+endmember_library = SpectralLibrary('data/urbanspectraandmeta_endmember.csv', 'Level_2',
+                                  np.arange(350, 2499, 2).astype(int).astype(str),np.arange(350, 2499, 2), class_valid_keys=['NPV', 'GV', 'SOIL'],scale_factor=10000. )
 
 endmember_library.load_data()
 endmember_library.filter_by_class()
-endmember_library.scale_library(10000.)
+endmember_library.scale_library()
+#endmember_library.scale_library(0.7)
 
 refl_file_bands = get_refl_wavelengths(args.reflectance_input_file)
-endmember_library.interpolate_library_to_new_wavelengths(refl_file_bands)
+endmember_library.interpolate_library_to_new_wavelengths(refl_file_bands.copy())
 
-bad_wv_regions = [[0,440],[1330,1490],[1170,2050],[2440,2880]]
+#bad_wv_regions = [[0,440],[1310,1490],[1770,2050],[2440,2880]]
 
-endmember_library.remove_wavelength_region_inplace(bad_wv_regions)
+endmember_library.remove_wavelength_region_inplace(bad_wv_regions,set_as_nans=True)
+#endmember_library.brightness_normalize()
+
+for _r in range(endmember_library.spectra.shape[0]):
+    plt.plot(refl_file_bands, endmember_library.spectra[_r,:])
+plt.savefig('figs/endmembers.png',dpi=200)
+plt.clf()
 
 n_classes = len(np.unique(endmember_library.classes))
 
@@ -126,7 +105,10 @@ for level in args.complexity_level:
     models_object.select_level(state=True, level=level)
     for i in np.arange(n_classes):
         models_object.select_class(state=True, index=i, level=level)
+
 print("Total number of models: " + str(models_object.total()))
+
+
 
 
 ######## Open up the dataset
@@ -134,12 +116,57 @@ dataset = gdal.Open(args.reflectance_input_file, gdal.GA_ReadOnly)
 x_len = int(dataset.RasterXSize)
 y_len = int(dataset.RasterYSize)
 
+#line = np.squeeze(dataset.ReadAsArray(0,1000,x_len,1))
+#line = line[:,np.all(line != -9999,axis=0)]
+#
+good_bands = get_good_bands_mask(refl_file_bands, bad_wv_regions)
+#line = line[good_bands,:]
+#line = line / np.sqrt(np.nanmean(np.power(line,2),axis=1))[:,np.newaxis]
+#
+#for _r in range(line.shape[1]):
+#    plt.plot(refl_file_bands[good_bands], line[:,_r],c='black',linewidth=0.1,alpha=0.3)
+#plt.savefig('figs/line_spectra.png',dpi=200)
+#
+#for _r in range(endmember_library.spectra.shape[0]):
+#    plt.plot(refl_file_bands, endmember_library.spectra[_r,:])
+#plt.savefig('figs/line_and_endmembers.png',dpi=200)
+#
+#plt.clf()
+
+endmember_library.spectra = endmember_library.spectra[:,good_bands]
+
+#core = mesma.MesmaCore()
+#mesma_results = core.execute(line,
+#                             endmember_library.spectra.T,
+#                             look_up_table=models_object.return_look_up_table(),
+#                             constraints=[-0.05,1.05,0.,-9999,-9999,-9999,-9999],
+#                             em_per_class=models_object.em_per_class,
+#                             )
+#quit()
+
 
 #spectral_library = np.transpose(spectral_library)
 
+
+########## TEST SINGLE SPECTRUM
+#img_dat = dataset.ReadAsArray(2000,1400,1,1).astype(np.float32)
+#img_dat[img_dat > 1]  /= 2
+#img_dat = img_dat[good_bands,...]
+#print(img_dat.shape)
+#
+#core = mesma.MesmaCore()
+#mesma_results = core.execute(img_dat,
+#                             endmember_library.spectra.T,
+#                             look_up_table=models_object.return_look_up_table(),
+#                             em_per_class=models_object.em_per_class,
+#                             #constraints=[-0.05,1.05,0.,-9999,-9999,-9999,-9999],
+#                             constraints=[-9999,-9999,-9999,-9999,-9999,-9999,-9999],
+#                             )
+
+
 ### Set up output files
-n_fraction_bands = 8
-n_model_bands = 7
+n_fraction_bands = 4
+n_model_bands = 3
 n_rmse_bands = 1
 
 output_files = [args.output_file_base + '_model', args.output_file_base + '_fraction', args.output_file_base + '_rmse']
@@ -154,46 +181,73 @@ for _n in range(len(output_files)):
     del outDataset
 
 
+
+
 # Define a function to run Mesma on one line of data
 def mesma_line(line):
-    img_dat = dataset.ReadAsArray(0,int(line),int(x_len),1).astype(np.float32)
-    img_dat, refl_file_bands_tmp = remove_wavelength_regions(img_dat, refl_file_bands.copy(), bad_wv_regions)
 
-    img_dat = img_dat
-    img_dat[img_dat > 1] = -9999
-    core = mesma.MesmaCore()
-    mesma_results = core.execute(img_dat,
-                                 endmember_library.spectra.T,
-                                 look_up_table=models_object.return_look_up_table(),
-                                 em_per_class=models_object.em_per_class,
-                                 )
+    # open the dataset fresh for proper parallel operation
+    lds = gdal.Open(args.reflectance_input_file, gdal.GA_ReadOnly)
+    img_dat = lds.ReadAsArray(0,int(line),int(x_len),1).astype(np.float32)
+    del lds
 
-    for _n in range(len(output_files)):
-        lr = mesma_results[_n]
-        if (len(lr.shape) == 2):
-            lr = lr.reshape((1, lr.shape[0], lr.shape[1]))
-        lr = lr.swapaxes(0,1)
-        memmap = np.memmap(output_files[_n], mode='r+', shape=(y_len, output_bands[_n], x_len), dtype=np.float32)
-        memmap[line,...] = lr
-        del memmap
+    img_dat = img_dat[good_bands,...]
+    img_dat[img_dat > 1]  /= 2
+
+    good_data = np.squeeze(np.all(img_dat != -9999,axis=0))
+
+    if np.sum(good_data) > 0:
+   
+        #img_dat = img_dat[...,good_data]
+        #img_dat = img_dat / np.sqrt(np.nanmean(np.power(img_dat,2),axis=1))[:,np.newaxis]
+
+        core = mesma.MesmaCore()
+        mesma_results = core.execute(img_dat[...,good_data],
+                                     endmember_library.spectra.T,
+                                     look_up_table=models_object.return_look_up_table(),
+                                     em_per_class=models_object.em_per_class,
+                                     #constraints=[-0.05,1.05,0.,-9999,-9999,-9999,-9999],
+                                     #constraints=[0.00,1.0,0.0,1.0,-9999,-9999,-9999],
+                                     constraints=[-9999,-9999,-9999,-9999,-9999,-9999,-9999],
+                                     )
+        mesma_results[1][:3,...] /= np.sum(mesma_results[1][:3,...],axis=0)[np.newaxis,...]
 
 
-# Run in parallel
+        for _n in range(len(output_files)):
+            lr = mesma_results[_n].copy()
+            if (len(lr.shape) == 2):
+                lr = lr.reshape((1, lr.shape[0], lr.shape[1]))
+            lr = lr.swapaxes(0,1)
+
+            write_lock.acquire()  
+            memmap = np.memmap(output_files[_n], mode='r+', shape=(y_len, output_bands[_n], x_len), dtype=np.float32)
+            memmap[line:line+1,:,good_data] = lr
+            write_lock.release()
+            del memmap
+
+
+## Run in parallel
 progress_bar = tqdm(total=y_len, ncols=80)
 def progress_update(*a):
     progress_bar.update()
 
+write_lock = multiprocessing.Lock()
 pool = multiprocessing.Pool(processes=args.n_cores)
 results = []
 for l in np.arange(0, y_len).astype(int):
     results.append(pool.apply_async(mesma_line, args=(l,), callback=progress_update))
+    #results.append(pool.apply_async(dummy_line, args=(l,)))
 results = [p.get() for p in results]
 pool.close()
 pool.join()
 
 
-#for l in tqdm(np.arange(0,y_len).astype(int)):
+#for l in tqdm(np.arange(0,y_len).astype(int),ncols=80):
+#for l in np.arange(0,y_len).astype(int):
 #    mesma_line(l)
+#    
+#    if l % int(y_len / 20.) == 0:
+#        print(int(l / int(y_len / 100.)),end=' ',flush=True)
 
 
 
