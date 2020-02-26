@@ -7,16 +7,16 @@ specific endmember generation process.  Steps:
 2) Use the Endmember average RMSE (EAR) tool from MESMA to select representative spectra.
 3) Combine the selected spectra together into a single, formatted output file.
 
-Spectral will be convolved to match the 
+Spectral will be convolved to match the
 
 Written by: Philip G. Brodrick
 """
 
 import numpy as np
 import pandas as pd
-import sys, os
-from square_array import SquareArray
-from ear_masa_cob import EarMasaCob
+import os
+from mesma.square_array import SquareArray
+from mesma.ear_masa_cob import EarMasaCob
 
 def get_good_bands_mask(wavelengths, wavelength_pairs):
     good_bands = np.ones(len(wavelengths)).astype(bool)

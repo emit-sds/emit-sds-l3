@@ -8,14 +8,14 @@ Written by: Philip. G. Brodrick
 """
 
 import argparse
-import sys, os
+import os
 import numpy as np
 import gdal
 from tqdm import tqdm
 import multiprocessing
 from build_endmember_library import SpectralLibrary, get_good_bands_mask, bad_wv_regions
 import matplotlib.pyplot as plt
-import mesma
+from mesma import mesma
 
 # MESMA throws a series of divide-by-zero errors that produce objectionable output, and can be safely ignored
 import warnings
