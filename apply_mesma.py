@@ -9,7 +9,6 @@ Written by: Philip. G. Brodrick
 
 import argparse
 import sys, os
-import pandas as pd
 import numpy as np
 import gdal
 from tqdm import tqdm
