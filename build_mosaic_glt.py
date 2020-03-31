@@ -23,6 +23,7 @@ def main():
     parser = argparse.ArgumentParser(description='Integrate multiple GLTs with a mosaicing rule')
     parser.add_argument('output_filename')
     parser.add_argument('-glt_file_list')
+    parser.add_argument('-igm_file_list')
     parser.add_argument('-criteria_file_list')
     parser.add_argument('-criteria_nodata', type=float, default=None)
     parser.add_argument('-criteria_band', type=int, default=1)
@@ -31,6 +32,8 @@ def main():
     parser.add_argument('-log_level', type=str, default='INFO')
     parser.add_argument('-glt_files', nargs='+', type=str,
                         help='a space-separated list of the input glt files.  Glob tokens accepted')
+    parser.add_argument('-igm_files', nargs='+', type=str,
+                        help='a space-separated list of the input igm files.  Glob tokens accepted')
     args = parser.parse_args()
 
     # Set up logging per arguments
@@ -38,6 +41,11 @@ def main():
         logging.basicConfig(format='%(message)s', level=args.log_level)
     else:
         logging.basicConfig(format='%(message)s', level=args.log_level, filename=args.log_file)
+
+    if int(args.glt_file_list is None) + int(args.igm_file_list is None) + int(args.glt_files is None) + \
+        int(args.igm_files is None) != 3:
+        raise IOError('One and only one of the arguments: [glt_file_list, igm_file_list, glt_files, '
+                      'igm_files] is accepted')
 
     # Get input files from file list
     glt_files = np.array(pd.read_csv(args.glt_file_list))
