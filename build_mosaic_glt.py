@@ -8,14 +8,17 @@ import argparse
 import numpy as np
 import pandas as pd
 import gdal
+import math
 import logging
 import multiprocessing
 from typing import List
+import scipy.spatial.distance
 
 import emit_utils.file_checks
 import emit_utils.multi_raster_info
 
 GLT_NODATA_VALUE=-9999
+IGM_NODATA_VALUE=-9999
 CRITERIA_NODATA_VALUE=-9999
 
 #TODO: add logging
@@ -23,6 +26,8 @@ CRITERIA_NODATA_VALUE=-9999
 def main():
     parser = argparse.ArgumentParser(description='Integrate multiple GLTs with a mosaicing rule')
     parser.add_argument('output_filename')
+    parser.add_argument('target_resolution')
+    parser.add_argument('target_extent')
     parser.add_argument('-glt_file_list')
     parser.add_argument('-igm_file_list')
     parser.add_argument('-criteria_file_list')
@@ -43,27 +48,78 @@ def main():
     else:
         logging.basicConfig(format='%(message)s', level=args.log_level, filename=args.log_file)
 
+    # Log the current time
+    logging.info('Starting build_mosaic_glt, arguments given as: {}'.format(args))
+    emit_utils.common_logs.logtime()
+
     if int(args.glt_file_list is None) + int(args.igm_file_list is None) + int(args.glt_files is None) + \
         int(args.igm_files is None) != 3:
         raise IOError('One and only one of the arguments: [glt_file_list, igm_file_list, glt_files, '
                       'igm_files] is accepted')
 
     # Get input files from file list
-    glt_files = np.squeeze(np.array(pd.read_csv(args.glt_file_list)))
+    #TODO: handle multiple types of glt inputs
+    if args.glt_file_list is not None:
+        logging.info('Checking input GLT files')
+        glt_files = np.squeeze(np.array(pd.read_csv(args.glt_file_list)))
+        emit_utils.file_checks.check_raster_files(glt_files, map_space=True)
+
+    #TODO: handle multiple types of igm inputs
+    if args.igm_file_list is not None:
+        logging.info('Checking input IGM files')
+        igm_files = np.squeeze(np.array(pd.read_csv(args.igm_file_list)))
+        emit_utils.file_checks.check_raster_files(igm_files, map_space=False)
+
     if args.criteria_file_list is not None:
+        logging.info('Checking input criteria files')
         criteria_files = np.squeeze(np.array(pd.read_csv(args.criteria_file_list)))
+        emit_utils.file_checks.check_raster_files(criteria_files, map_space=False)
     else:
         criteria_files = None
 
-    # Do some checks on input raster files
-    emit_utils.file_checks.check_raster_files(glt_files, map_space=True)
-    if criteria_files is not None:
-        emit_utils.file_checks.check_raster_files(criteria_files, map_space=False)
 
+    min_x_map, max_y_map, max_x_map, min_y_map, file_min_xy, file_max_xy = emit_utils.\
+        multi_raster_info.get_bounding_extent_igms(igm_files, return_per_file_xy=True)
+
+    #TODO: place check on target_resolution input argument prior to this point
+    x_size_px = int(math.ceil((max_x_map - min_x_map) / float(args.target_resolution[0])))
+    y_size_px = int(math.ceil((max_y_map - min_y_map) / float(-args.target_resolution[1])))
+
+    #TODO: insert any appropriate tapping or grid-subsetting HERE
+
+    # Build output dataset
+    driver = gdal.GetDriverByName('ENVI')
+    driver.Register()
+
+    geotransform = [min_x_map, args.target_resolution[0], 0, max_y_map, 0, args.target_resolution[1]]
+
+    outDataset = driver.Create(args.output_filename, x_size_px, y_size_px, 3, gdal.GDT_Int32, options=['INTERLEAVE=BIL'])
+    outDataset.setGeoTransform(geotransform)
+    #TODO: allow projection as input argument
+    outDataset.SetWellKnownGeogCS("EPSG:4326")
+
+    pool = multiprocessing.Pool(processes=args.n_cores)
+    results = []
+    for idx_y in range(y_size_px):
+        if args.n_cores == 1:
+            construct_mosaic_glt_from_igm_line(args.output_file, geotransform, igm_files, criteria_files, (x_size_px, y_size_px), file_min_xy,
+                                               file_max_xy, idx_y)
+        else:
+            results.append(pool.apply_async(construct_mosaic_glt_from_igm_line,
+                                            args=(args.output_file, geotransform, igm_files, criteria_files, (x_size_px, y_size_px), file_min_xy,
+                                                file_max_xy, idx_y
+                                                ,)))
+    if args.n_cores != 1:
+        results = [p.get() for p in results]
+    pool.close()
+    pool.join()
+
+
+    """
+    ############ uniform GLT-grid assumption - deprecating, but preserving till speed tests are complete ########
     min_x_map, max_y_map, max_x_map, min_y_map, px_offsets, lr_px_coords = emit_utils.multi_raster_info.get_bounding_extent(glt_files,
-                                                                                            return_pixel_offsets=True,
-                                                                                            return_global_lower_rights=True)
-
+                                                                                                                            return_pixel_offsets=True,
+                                                                                                                            return_global_lower_rights=True)
     # Get some info about the first file, which we'll need shortly
     first_file_dataset = gdal.Open(glt_files[0], gdal.GA_ReadOnly)
     geotransform = first_file_dataset.GetGeoTransform()
@@ -87,14 +143,144 @@ def main():
     results = []
     for idx_y in range(y_size_px):
         if args.n_cores == 1:
-            construct_mosaic_glt_line(glt_files, criteria_files, x_size_px, px_offsets, lr_px_coords, idx_y)
+            construct_mosaic_glt_line(args.output_filename, glt_files, criteria_files, (x_size_px, y_size_px), px_offsets, lr_px_coords, idx_y)
         else:
             results.append(pool.apply_async(construct_mosaic_glt_line,
-                                            args=(glt_files, criteria_files, x_size_px, px_offsets, lr_px_coords, idx_y,)))
+                                            args=(args.output_filename, glt_files, criteria_files, (x_size_px, y_size_px), px_offsets, lr_px_coords, idx_y,)))
     if args.n_cores != 1:
         results = [p.get() for p in results]
     pool.close()
     pool.join()
+    """
+
+
+
+def construct_mosaic_glt_from_igm_line(output_file: str, output_geotransform: tuple, igm_files: np.array, criteria_files: np.array, size_px: tuple,
+                              file_min_xy: List, file_max_xy: List, line_index: int, criteria_band: int = 1):
+    """
+    Build one line of a mosaic GLT.  Must be able to hold entire line in memory space.
+    Args:
+        output_file: output 3-band mosaic glt file, presumed to already be initialized
+        output_geotransform: gdal-style geotranform of output file
+        igm_files: glt files (3-band images of (x,y,x) map-space coordinates in raw-space
+        criteria_files: files to use to determine how to order overlaps, or None to do an naive implementation
+        size_px: mosaic glt file size in pixels (x,y)
+        file_min_xy: coordinate-pair map-space mins of each file
+        file_max_xy: coordinate-pair map-space maxs of each file
+        line_index: the line of the mosaic glt to build
+        criteria_band: which band of the criteria file to use
+    Returns:
+        None
+    """
+
+    # initialize null best criteria values and glt values
+    line_criteria = np.zeros(size_px[0])
+    line_criteria[:] = np.nan
+
+    line_glt = np.zeros((size_px[0], 3))
+    line_glt[...] = np.nan
+
+    # Find min and max map-space y values for this line
+    line_min_y = output_geotransform[3] + (line_index + 1)*output_geotransform[5]
+    line_max_y = output_geotransform[3]
+
+    map_match_centers = np.zeros((2,1,size_px[1]))
+    map_match_centers[0,...] = output_geotransform[0] + (np.arange(size_px[0])+0.5) * output_geotransform[1]
+    map_match_centers[1,...] = output_geotransform[3] + (line_index + 0.5) * output_geotransform[5]
+
+    # Start a loop through each file
+    for file_index, (igm_file, f_min_xy, f_max_xy) in enumerate(zip(igm_files, file_min_xy, file_max_xy)):
+
+        # No need to proceed with this file if it's out of bounds
+        if f_max_xy[1] < line_min_y or f_min_xy[1] > line_max_y:
+            continue
+
+        # unfortunately, we have to read the whole file in now.
+        igm = gdal.Open(igm_file, gdal.GA_ReadOnly).ReadAsArray()
+
+        # Get source-locations of this file
+        valid_igm = np.all(igm != IGM_NODATA_VALUE, axis=0)
+        igm[:,np.logical_not(valid_igm)] = np.nan
+
+        closest_x_px, closest_y_px = match_map_centers(igm, map_match_centers, y_bounds = (line_min_y, line_max_y))
+
+        # Get criteria values of this file (if provided)
+        if criteria_files is not None:
+            min_glt_y = np.min(closest_y_px)
+            max_glt_y = np.max(closest_y_px)
+
+            # Open up the criteria dataset
+            criteria_dataset = gdal.Open(criteria_files[file_index], gdal.GA_ReadOnly)
+
+            # Read in the block of data necessary to get the criteria
+            criteria_block = np.zeros((max_glt_y - min_glt_y, criteria_dataset.RasterXSize))
+            for gltindex in range(min_glt_y, max_glt_y):
+                criteria_block[gltindex-min_glt_y, :] = np.squeeze(criteria_dataset.ReadAsArray(0, gltindex,
+                                                                criteria_dataset.RasterXSize, 1)[criteria_band,...])
+
+            # Now get the specific info we want
+            # TODO: careful about criteria datatype
+            criteria = criteria_block[closest_y_px - min_glt_y, closest_x_px].astype(np.float32)
+            criteria[criteria == CRITERIA_NODATA_VALUE] = np.nan
+
+            # Now we can determine priority
+            current_line_superior = np.logical_or(criteria > line_criteria, np.isnan(line_criteria))
+
+            # copy in new values
+            line_criteria[current_line_superior] = criteria
+            line_glt[current_line_superior, 0] = closest_x_px[current_line_superior]
+            line_glt[current_line_superior, 1] = closest_y_px[current_line_superior]
+            line_glt[current_line_superior, 2] = file_index
+        else:
+            line_glt[..., 0] = closest_x_px
+            line_glt[..., 1] = closest_y_px
+
+    # Loop is finished, convert nans to nodata and write the output
+    # TODO: careful about output datatype
+    line_glt[np.isnan(line_glt)] = GLT_NODATA_VALUE
+    output_memmap = np.memmap(output_file, mode='r+', shape=(size_px[1], 3, size_px[0]), dtype=np.int32)
+    output_memmap[line_index, ...] = np.transpose(line_glt)
+    del output_memmap
+
+
+def match_map_centers(igm_input, map_match_centers, y_bounds=None):
+    """
+    Find closes px coordinate matches between an igm and a grid of locations in glt_format
+    Args:
+        igm_input: array of igm point locations in map space
+        map_match_centers: locations to match the igm to
+        y_bounds: pair map-space (y_min, y_max) values to crop the igm search with
+    Return:
+        closest_x_px: array of closest x-pixel l
+
+    """
+    igm_shape = igm_input.shape
+    if y_bounds is None:
+        igm_xy = np.hstack([np.flatten(igm_input[0,...]).reshape(-1,1), np.flatten(igm_input[1,...]).reshape(-1,1)])
+        y_offset = 0
+    else:
+        subset = np.logical_and(igm_input[1, ...] > y_bounds[0], igm_input[1, ...] < y_bounds[1])
+        igm_xy = np.hstack([np.flatten(igm_input[0, subset]).reshape(-1, 1), np.flatten(igm_input[1, subset]).reshape(-1,1)])
+
+
+    map_centers_xy = np.hstack([map_match_centers[0,...].flatten().reshape(-1,1), map_match_centers[1,...].flatten().reshape(-1,1)])
+
+    distance = scipy.spatial.distance.cdist(map_centers_xy, igm_xy, metric='euclidean')
+    del map_centers_xy, igm_xy
+
+    closest_idx = np.nanargmin(distance,axis=1)
+    del distance
+
+    x_px = np.arange(igm_shape[2])[np.newaxis,:] * np.ones((igm_shape[1],igm_shape[2]))
+    y_px = np.arange(igm_shape[1])[:,np.newaxis] * np.ones((igm_shape[1],igm_shape[2]))
+    if y_bounds is not None:
+        x_px = x_px[subset]
+        y_px = y_px[subset]
+
+    closest_x_px = x_px.flatten()[closest_idx]
+    closest_y_px = y_px.flatten()[closest_idx]
+
+    return closest_x_px, closest_y_px
 
 
 def construct_mosaic_glt_line(output_file: str, glt_files: np.array, criteria_files: np.array, size_px: tuple,
