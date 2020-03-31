@@ -50,7 +50,7 @@ def main():
     logging.info('GLT is a 3-band file, running in mosaic mode.')
 
     if is_mosaic:
-        rawspace_files = np.array(pd.read_csv(args.rawspace_file))
+        rawspace_files = np.squeeze(np.array(pd.read_csv(args.rawspace_file)))
         emit_utils.file_checks.check_raster_files(rawspace_files, map_space=False)
         # TODO: check that all rawspace files have same number of bands
     else:

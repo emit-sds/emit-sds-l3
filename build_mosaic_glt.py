@@ -12,7 +12,8 @@ import logging
 import multiprocessing
 from typing import List
 
-import emit_utils
+import emit_utils.file_checks
+import emit_utils.multi_raster_info
 
 GLT_NODATA_VALUE=-9999
 CRITERIA_NODATA_VALUE=-9999
@@ -40,9 +41,9 @@ def main():
         logging.basicConfig(format='%(message)s', level=args.log_level, filename=args.log_file)
 
     # Get input files from file list
-    glt_files = np.array(pd.read_csv(args.glt_file_list))
+    glt_files = np.squeeze(np.array(pd.read_csv(args.glt_file_list)))
     if args.criteria_file_list is not None:
-        criteria_files = np.array(pd.read_csv(args.criteria_file_list))
+        criteria_files = np.squeeze(np.array(pd.read_csv(args.criteria_file_list)))
     else:
         criteria_files = None
 
@@ -88,7 +89,7 @@ def main():
     pool.join()
 
 
-def construct_mosaic_glt_line(output_file: str, glt_files: np.ndarray, criteria_files: np.nd_array, size_px: tuple,
+def construct_mosaic_glt_line(output_file: str, glt_files: np.array, criteria_files: np.array, size_px: tuple,
                               px_offsets: List, lr_px_coords: List, line_index: int, criteria_band: int = 1):
     """
     Build one line of a mosaic GLT.  Must be able to hold entire line in memory space.

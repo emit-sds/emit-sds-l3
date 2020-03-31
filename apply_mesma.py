@@ -152,7 +152,7 @@ def mesma_line(line):
     good_data = np.squeeze(np.all(img_dat != args.refl_nodata,axis=0))
 
     if np.sum(good_data) > 0:
-        #img_dat = img_dat[...,good_data]
+        img_dat = img_dat[...,good_data]
         #img_dat = img_dat / np.sqrt(np.nanmean(np.power(img_dat,2),axis=1))[:,np.newaxis]
         img_dat /= args.refl_scale
 
