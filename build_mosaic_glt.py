@@ -88,6 +88,7 @@ def main():
 
         max_y_map = args.target_extent_ul_lr[1]
         min_y_map = args.target_extent_ul_lr[3]
+        # TODO: insert any appropriate tapping here
         logging.info('Revised min xy: {}, max xy: {}'.format((min_x_map, min_y_map),(max_x_map, max_y_map)))
 
     #TODO: place check on target_resolution input argument prior to this point
@@ -95,10 +96,12 @@ def main():
     y_size_px = int(math.ceil((max_y_map - min_y_map) / float(-args.target_resolution[1])))
 
     logging.info('Output map size (y,x): {}, {}'.format(y_size_px,x_size_px))
-        
 
+    igms = []
+    for igm_ind, igm_file in enumerate(igm_files):
+        igms.append(gdal.Open(igm_file,gdal.GA_ReadOnly).ReadAsArray())
+        logging.info('Reading IGM {}, {}/{}'.format(igm_file, igm_ind, len(igm_files)))
 
-    #TODO: insert any appropriate tapping or grid-subsetting HERE
 
     # Build output dataset
     driver = gdal.GetDriverByName('ENVI')
@@ -123,11 +126,11 @@ def main():
     for idx_y in range(y_size_px):
         if args.n_cores == 1:
             construct_mosaic_glt_from_igm_line(args.output_filename, geotransform, igm_files, criteria_files, (x_size_px, y_size_px), file_min_xy,
-                                               file_max_xy, idx_y)
+                                               file_max_xy, idx_y, igms)
         else:
             results.append(pool.apply_async(construct_mosaic_glt_from_igm_line,
                                             args=(args.output_filename, geotransform, igm_files, criteria_files, (x_size_px, y_size_px), file_min_xy,
-                                                file_max_xy, idx_y
+                                                file_max_xy, idx_y, igms
                                                 ,)))
     if args.n_cores != 1:
         results = [p.get() for p in results]
@@ -176,7 +179,7 @@ def main():
 
 
 def construct_mosaic_glt_from_igm_line(output_file: str, output_geotransform: tuple, igm_files: np.array, criteria_files: np.array, size_px: tuple,
-                              file_min_xy: List, file_max_xy: List, line_index: int, criteria_band: int = 1):
+                              file_min_xy: List, file_max_xy: List, line_index: int, igms = None, criteria_band: int = 1):
     """
     Build one line of a mosaic GLT.  Must be able to hold entire line in memory space.
     Args:
@@ -188,6 +191,7 @@ def construct_mosaic_glt_from_igm_line(output_file: str, output_geotransform: tu
         file_min_xy: coordinate-pair map-space mins of each file
         file_max_xy: coordinate-pair map-space maxs of each file
         line_index: the line of the mosaic glt to build
+        igms: read-in igms to limit IO (high memory required)
         criteria_band: which band of the criteria file to use
     Returns:
         None
@@ -221,7 +225,10 @@ def construct_mosaic_glt_from_igm_line(output_file: str, output_geotransform: tu
         #TODO: Do x checking as well
 
         # unfortunately, we have to read the whole file in now.
-        igm = gdal.Open(igm_file, gdal.GA_ReadOnly).ReadAsArray()
+        if igms is None:
+            igm = gdal.Open(igm_file, gdal.GA_ReadOnly).ReadAsArray()
+        else:
+            igm = igms[file_index]
 
         # Get source-locations of this file
         valid_igm = np.all(igm != IGM_NODATA_VALUE, axis=0)
