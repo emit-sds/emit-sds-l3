@@ -13,7 +13,9 @@ import multiprocessing
 from typing import List
 import time
 
-import emit_utils
+import emit_utils.common_logs
+import emit_utils.file_checks
+import emit_utils.multi_raster_info
 
 GLT_NODATA_VALUE=-9999
 CRITERIA_NODATA_VALUE=-9999
@@ -22,9 +24,9 @@ CRITERIA_NODATA_VALUE=-9999
 def main():
     parser = argparse.ArgumentParser(description='Integrate multiple GLTs with a mosaicing rule')
     parser.add_argument('glt_file')
-    parser.add_argument('rawspace_file', desc='filename of rawspace source file or, in the case of a mosaic_glt, a text-file list of raw space files')
+    parser.add_argument('rawspace_file', help='filename of rawspace source file or, in the case of a mosaic_glt, a text-file list of raw space files')
     parser.add_argument('output_filename')
-    parser.add_argument('-band_numbers', nargs='+', default=-1, desc='list of 0-based band numbers, or -1 for all')
+    parser.add_argument('-band_numbers', nargs='+', type=int, default=-1, help='list of 0-based band numbers, or -1 for all')
     parser.add_argument('-n_cores', type=int, default=-1)
     parser.add_argument('-log_file', type=str, default=None)
     parser.add_argument('-log_level', type=str, default='INFO')
@@ -41,7 +43,7 @@ def main():
     emit_utils.common_logs.logtime()
 
     # Do some checks on input raster files
-    emit_utils.file_checks.check_raster_files(args.glt_file, map_space=True)
+    emit_utils.file_checks.check_raster_files([args.glt_file], map_space=True)
 
     # Open the GLT dataset
     glt_dataset = gdal.Open(args.glt_file, gdal.GA_ReadOnly)
@@ -60,10 +62,10 @@ def main():
     # TODO: consider adding check for the right number of rawspace_files - requires
     # reading the GLT through, which isn't free
 
-    first_file_dataset = gdal.Open(args.rawspace_file[0], gdal.GA_ReadOnly)
+    first_file_dataset = gdal.Open(rawspace_files[0], gdal.GA_ReadOnly)
 
-    if args.bands_numbers == -1:
-        output_bands = np.array(first_file_dataset.RasterCount)
+    if args.band_numbers == -1:
+        output_bands = np.arange(first_file_dataset.RasterCount)
     else:
         output_bands = np.array(args.band_numbers)
 
@@ -75,16 +77,18 @@ def main():
     outDataset = driver.Create(args.output_filename, glt_dataset.RasterXSize, glt_dataset.RasterYSize,
                                len(output_bands), gdal.GDT_Float32, options=['INTERLEAVE=BIL'])
     outDataset.SetProjection(glt_dataset.GetProjection())
-    outDataset.SetGeotransform(glt_dataset.GetGeoTransform)
+    outDataset.SetGeoTransform(glt_dataset.GetGeoTransform())
     del outDataset
 
+    if args.n_cores == -1:
+        args.n_cores = multiprocessing.cpu_count()
     pool = multiprocessing.Pool(processes=args.n_cores)
     results = []
     for idx_y in range(glt_dataset.RasterYSize):
         if args.n_cores == 1:
-            apply_mosaic_glt_line(args.glt_file, args.output_filename, args.rawspace_file, idx_y)
+            apply_mosaic_glt_line(args.glt_file, args.output_filename, rawspace_files, output_bands, idx_y)
         else:
-            results.append(pool.apply_async(apply_mosaic_glt_line, args=(args.glt_file, args.output_filename, args.arwspace_file, idx_y)))
+            results.append(pool.apply_async(apply_mosaic_glt_line, args=(args.glt_file, args.output_filename, rawspace_files, output_bands, idx_y)))
     if args.n_cores != 1:
         results = [p.get() for p in results]
     pool.close()
@@ -114,7 +118,7 @@ def apply_mosaic_glt_line(glt_filename: str, output_filename: str, rawspace_file
     if line_index % 1000:
         logging.info('Beginning application of line {}/{}'.format(line_index, glt_dataset.RasterYSize))
 
-    glt_line = glt_dataset.ReadAsArray(0, line_index, glt_dataset.RasterYSize, 1)
+    glt_line = glt_dataset.ReadAsArray(0, line_index, glt_dataset.RasterXSize, 1)
     valid_glt = np.all(glt_line != GLT_NODATA_VALUE, axis=0)
 
     if np.sum(valid_glt) == 0:
@@ -139,24 +143,24 @@ def apply_mosaic_glt_line(glt_filename: str, output_filename: str, rawspace_file
         rawspace_dataset = gdal.Open(rawspace_files[file_index], gdal.GA_ReadOnly)
 
         # Read in the block of data necessary to get the criteria
-        rawspace_block = np.zeros((max_glt_y - min_glt_y, rawspace_dataset.RasterXSize))
-        for gltindex in range(min_glt_y, max_glt_y):
+        rawspace_block = np.zeros((len(output_bands), max_glt_y - min_glt_y + 1, rawspace_dataset.RasterXSize))
+        for gltindex in range(min_glt_y, max_glt_y+1):
             direct_read = np.squeeze(rawspace_dataset.ReadAsArray(0, gltindex,rawspace_dataset.RasterXSize,1))
 
-            # account for extra bands, if this isn't a single-band dataset (gdal drops the 0th dimension if it is)
-            if glt_dataset.RasterCount > 0:
+            # TODO: account for extra bands, if this isn't a single-band dataset (gdal drops the 0th dimension if it is)
+            if rawspace_dataset.RasterCount > 0:
                 direct_read = direct_read[output_bands,...]
 
             # assign data to block
-            rawspace_block[gltindex - min_glt_y, :] = direct_read
+            rawspace_block[:, gltindex - min_glt_y, :] = direct_read
 
         # convert rawspace to mapspace through lookup
-        mapspace_line = rawspace_block[glt_line[0, pixel_subset].flatten(), glt_line[1, pixel_subset].flatten() - min_glt_y]
+        mapspace_line = rawspace_block[:,glt_line[1, pixel_subset].flatten() - min_glt_y, glt_line[0, pixel_subset].flatten()]
 
         # write the output
         #TODO: careful about output datatype
-        output_memmap = np.memmap(output_filename, mode='r+', shape=(glt_dataset.RasterXSize, len(output_bands), glt_dataset.RasterYSize), dtype=np.float32)
-        output_memmap[line_index, pixel_subset] = np.transpose(mapspace_line)
+        output_memmap = np.memmap(output_filename, mode='r+', shape=(glt_dataset.RasterYSize, len(output_bands), glt_dataset.RasterXSize), dtype=np.float32)
+        output_memmap[line_index, :, np.squeeze(pixel_subset)] = np.transpose(mapspace_line)
         del output_memmap
 
 
