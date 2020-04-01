@@ -122,15 +122,17 @@ def main():
         args.n_cores = multiprocessing.cpu_count()
 
     pool = multiprocessing.Pool(processes=args.n_cores)
+    line_breaks = np.linspace(0,y_size_px,num=args.n_cores+1,dtype=np.int32)
+
     results = []
-    for idx_y in range(y_size_px):
+    for idx_y in range(len(line_breaks)-1):
         if args.n_cores == 1:
             construct_mosaic_glt_from_igm_line(args.output_filename, geotransform, igm_files, criteria_files, (x_size_px, y_size_px), file_min_xy,
-                                               file_max_xy, idx_y, igms)
+                                               file_max_xy, line_breaks[idx_y], line_breaks[idx_y+1])
         else:
             results.append(pool.apply_async(construct_mosaic_glt_from_igm_line,
                                             args=(args.output_filename, geotransform, igm_files, criteria_files, (x_size_px, y_size_px), file_min_xy,
-                                                file_max_xy, idx_y, igms
+                                                file_max_xy, line_breaks[idx_y], line_breaks[idx_y+1]
                                                 ,)))
     if args.n_cores != 1:
         results = [p.get() for p in results]
@@ -179,7 +181,7 @@ def main():
 
 
 def construct_mosaic_glt_from_igm_line(output_file: str, output_geotransform: tuple, igm_files: np.array, criteria_files: np.array, size_px: tuple,
-                              file_min_xy: List, file_max_xy: List, line_index: int, igms = None, criteria_band: int = 1):
+                              file_min_xy: List, file_max_xy: List, start_line: int, stop_line = None, criteria_band: int = 1):
     """
     Build one line of a mosaic GLT.  Must be able to hold entire line in memory space.
     Args:
@@ -190,99 +192,106 @@ def construct_mosaic_glt_from_igm_line(output_file: str, output_geotransform: tu
         size_px: mosaic glt file size in pixels (x,y)
         file_min_xy: coordinate-pair map-space mins of each file
         file_max_xy: coordinate-pair map-space maxs of each file
-        line_index: the line of the mosaic glt to build
-        igms: read-in igms to limit IO (high memory required)
+        start_line: the first line of the mosaic glt to build
+        stop_line: the last line of the mosaic glt to build, if None build the whole thing
         criteria_band: which band of the criteria file to use
     Returns:
         None
     """
 
-    # initialize null best criteria values and glt values
-    line_criteria = np.zeros(size_px[0])
-    line_criteria[:] = np.nan
+    if stop_line is None:
+        stop_line = size_px[1]
 
-    line_glt = np.zeros((size_px[0], 3))
-    line_glt[...] = np.nan
+    for line_index in range(start_line, stop_line):
+        # initialize null best criteria values and glt values
+        line_criteria = np.zeros(size_px[0])
+        line_criteria[:] = np.nan
 
-    #line_distance = np.zeros((size_px[0], 3))
-    #line_distance[...] = np.nan
+        line_glt = np.zeros((size_px[0], 3))
+        line_glt[...] = np.nan
 
-    # Find min and max map-space y values for this line
-    line_min_y = output_geotransform[3] + (line_index + 1)*output_geotransform[5]
-    line_max_y = output_geotransform[3]
+        #line_distance = np.zeros((size_px[0], 3))
+        #line_distance[...] = np.nan
 
-    map_match_centers = np.zeros((2,1,size_px[0]))
-    map_match_centers[0,...] = output_geotransform[0] + (np.arange(size_px[0])+0.5) * output_geotransform[1]
-    map_match_centers[1,...] = output_geotransform[3] + (line_index + 0.5) * output_geotransform[5]
+        # Find min and max map-space y values for this line
+        line_min_y = output_geotransform[3] + (line_index + 1)*output_geotransform[5]
+        line_max_y = output_geotransform[3]
 
-    # Start a loop through each file
-    for file_index, (igm_file, f_min_xy, f_max_xy) in enumerate(zip(igm_files, file_min_xy, file_max_xy)):
+        map_match_centers = np.zeros((2,1,size_px[0]))
+        map_match_centers[0,...] = output_geotransform[0] + (np.arange(size_px[0])+0.5) * output_geotransform[1]
+        map_match_centers[1,...] = output_geotransform[3] + (line_index + 0.5) * output_geotransform[5]
 
-        # No need to proceed with this file if it's out of bounds
-        if f_max_xy[1] < line_min_y or f_min_xy[1] > line_max_y:
-            continue
+        igms = [None for x in range(len(igm_files))]
 
-        #TODO: Do x checking as well
+        # Start a loop through each file
+        for file_index, (igm_file, f_min_xy, f_max_xy) in enumerate(zip(igm_files, file_min_xy, file_max_xy)):
 
-        # unfortunately, we have to read the whole file in now.
-        if igms is None:
-            igm = gdal.Open(igm_file, gdal.GA_ReadOnly).ReadAsArray()
-        else:
-            igm = igms[file_index]
+            # No need to proceed with this file if it's out of bounds
+            if f_max_xy[1] < line_min_y or f_min_xy[1] > line_max_y:
+                continue
 
-        # Get source-locations of this file
-        valid_igm = np.all(igm != IGM_NODATA_VALUE, axis=0)
-        igm[:,np.logical_not(valid_igm)] = np.nan
+            #TODO: Do x checking as well
 
-        closest_x_px, closest_y_px, closest_distance = match_map_centers(igm, map_match_centers, y_bounds = (line_min_y, line_max_y))
-        #TODO: make distance threshold an argument
-        close_enough = closest_distance < 2*output_geotransform[1]
-        closest_x_px = closest_x_px[close_enough]
-        closest_y_px = closest_y_px[close_enough]
-        closest_distance = closest_distance[close_enough]
-
-        # Only procede if we have some points to use
-        if len(closest_x_px) > 0:
-
-            # Get criteria values of this file (if provided)
-            if criteria_files is not None:
-                min_glt_y = np.min(closest_y_px)
-                max_glt_y = np.max(closest_y_px)
-
-                # Open up the criteria dataset
-                criteria_dataset = gdal.Open(criteria_files[file_index], gdal.GA_ReadOnly)
-
-                # Read in the block of data necessary to get the criteria
-                criteria_block = np.zeros((max_glt_y - min_glt_y, criteria_dataset.RasterXSize))
-                for gltindex in range(min_glt_y, max_glt_y):
-                    criteria_block[gltindex-min_glt_y, :] = np.squeeze(criteria_dataset.ReadAsArray(0, gltindex,
-                                                                    criteria_dataset.RasterXSize, 1)[criteria_band,...])
-
-                # Now get the specific info we want
-                # TODO: careful about criteria datatype
-                criteria = criteria_block[closest_y_px - min_glt_y, closest_x_px].astype(np.float32)
-                criteria[criteria == CRITERIA_NODATA_VALUE] = np.nan
-
-                # Now we can determine priority
-                current_line_superior = np.logical_or(criteria > line_criteria, np.isnan(line_criteria))
-
-                # copy in new values
-                line_criteria[current_line_superior] = criteria
-                line_glt[current_line_superior, 0] = closest_x_px[current_line_superior]
-                line_glt[current_line_superior, 1] = closest_y_px[current_line_superior]
-                line_glt[current_line_superior, 2] = file_index
+            # unfortunately, we have to read the whole file in now.
+            if igms[file_index] is None
+                igm = gdal.Open(igm_file, gdal.GA_ReadOnly).ReadAsArray()
+                igms[file_index] = igm
             else:
-                line_glt[close_enough, 0] = closest_x_px
-                line_glt[close_enough, 1] = closest_y_px
-                line_glt[close_enough, 2] = file_index
+                igm = igms[file_index]
 
-    # Loop is finished, convert nans to nodata and write the output
-    # TODO: careful about output datatype
-    line_glt[np.isnan(line_glt)] = GLT_NODATA_VALUE
-    output_memmap = np.memmap(output_file, mode='r+', shape=(size_px[1], 3, size_px[0]), dtype=np.int32)
-    output_memmap[line_index, ...] = np.transpose(line_glt)
-    logging.info('Completed line {}/{}'.format(line_index,size_px[1]))
-    del output_memmap
+            # Get source-locations of this file
+            valid_igm = np.all(igm != IGM_NODATA_VALUE, axis=0)
+            igm[:,np.logical_not(valid_igm)] = np.nan
+
+            closest_x_px, closest_y_px, closest_distance = match_map_centers(igm, map_match_centers, y_bounds = (line_min_y, line_max_y))
+            #TODO: make distance threshold an argument
+            close_enough = closest_distance < 2*output_geotransform[1]
+            closest_x_px = closest_x_px[close_enough]
+            closest_y_px = closest_y_px[close_enough]
+            closest_distance = closest_distance[close_enough]
+
+            # Only procede if we have some points to use
+            if len(closest_x_px) > 0:
+
+                # Get criteria values of this file (if provided)
+                if criteria_files is not None:
+                    min_glt_y = np.min(closest_y_px)
+                    max_glt_y = np.max(closest_y_px)
+
+                    # Open up the criteria dataset
+                    criteria_dataset = gdal.Open(criteria_files[file_index], gdal.GA_ReadOnly)
+
+                    # Read in the block of data necessary to get the criteria
+                    criteria_block = np.zeros((max_glt_y - min_glt_y, criteria_dataset.RasterXSize))
+                    for gltindex in range(min_glt_y, max_glt_y):
+                        criteria_block[gltindex-min_glt_y, :] = np.squeeze(criteria_dataset.ReadAsArray(0, gltindex,
+                                                                        criteria_dataset.RasterXSize, 1)[criteria_band,...])
+
+                    # Now get the specific info we want
+                    # TODO: careful about criteria datatype
+                    criteria = criteria_block[closest_y_px - min_glt_y, closest_x_px].astype(np.float32)
+                    criteria[criteria == CRITERIA_NODATA_VALUE] = np.nan
+
+                    # Now we can determine priority
+                    current_line_superior = np.logical_or(criteria > line_criteria, np.isnan(line_criteria))
+
+                    # copy in new values
+                    line_criteria[current_line_superior] = criteria
+                    line_glt[current_line_superior, 0] = closest_x_px[current_line_superior]
+                    line_glt[current_line_superior, 1] = closest_y_px[current_line_superior]
+                    line_glt[current_line_superior, 2] = file_index
+                else:
+                    line_glt[close_enough, 0] = closest_x_px
+                    line_glt[close_enough, 1] = closest_y_px
+                    line_glt[close_enough, 2] = file_index
+
+        # Loop is finished, convert nans to nodata and write the output
+        # TODO: careful about output datatype
+        line_glt[np.isnan(line_glt)] = GLT_NODATA_VALUE
+        output_memmap = np.memmap(output_file, mode='r+', shape=(size_px[1], 3, size_px[0]), dtype=np.int32)
+        output_memmap[line_index, ...] = np.transpose(line_glt)
+        logging.info('Completed line {}/{}'.format(line_index,size_px[1]))
+        del output_memmap
 
 
 def match_map_centers(igm_input, map_match_centers, y_bounds=None):
