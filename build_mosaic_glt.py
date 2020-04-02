@@ -21,6 +21,7 @@ import emit_utils.common_logs
 GLT_NODATA_VALUE=-9999
 IGM_NODATA_VALUE=-9999
 CRITERIA_NODATA_VALUE=-9999
+igms = []
 
 #TODO: add logging
 
@@ -97,9 +98,12 @@ def main():
 
     logging.info('Output map size (y,x): {}, {}'.format(y_size_px,x_size_px))
 
-    igms = []
     for igm_ind, igm_file in enumerate(igm_files):
-        igms.append(gdal.Open(igm_file,gdal.GA_ReadOnly).ReadAsArray())
+    
+        igm = gdal.Open(igm_file,gdal.GA_ReadOnly).ReadAsArray()
+        valid_igm = np.all(igm != IGM_NODATA_VALUE, axis=0)
+        igm[:,np.logical_not(valid_igm)] = np.nan
+        igms.append(igm)
         logging.info('Reading IGM {}, {}/{}'.format(igm_file, igm_ind, len(igm_files)))
 
 
@@ -221,7 +225,7 @@ def construct_mosaic_glt_from_igm_line(output_file: str, output_geotransform: tu
         map_match_centers[0,...] = output_geotransform[0] + (np.arange(size_px[0])+0.5) * output_geotransform[1]
         map_match_centers[1,...] = output_geotransform[3] + (line_index + 0.5) * output_geotransform[5]
 
-        igms = [None for x in range(len(igm_files))]
+        #igms = [None for x in range(len(igm_files))]
 
         # Start a loop through each file
         for file_index, (igm_file, f_min_xy, f_max_xy) in enumerate(zip(igm_files, file_min_xy, file_max_xy)):
@@ -233,15 +237,16 @@ def construct_mosaic_glt_from_igm_line(output_file: str, output_geotransform: tu
             #TODO: Do x checking as well
 
             # unfortunately, we have to read the whole file in now.
-            if igms[file_index] is None
-                igm = gdal.Open(igm_file, gdal.GA_ReadOnly).ReadAsArray()
-                igms[file_index] = igm
-            else:
-                igm = igms[file_index]
+            #if igms[file_index] is None:
+            #    igm = gdal.Open(igm_file, gdal.GA_ReadOnly).ReadAsArray()
+            #    igms[file_index] = igm
+            #else:
+
+            igm = igms[file_index]
 
             # Get source-locations of this file
-            valid_igm = np.all(igm != IGM_NODATA_VALUE, axis=0)
-            igm[:,np.logical_not(valid_igm)] = np.nan
+            #valid_igm = np.all(igm != IGM_NODATA_VALUE, axis=0)
+            #igm[:,np.logical_not(valid_igm)] = np.nan
 
             closest_x_px, closest_y_px, closest_distance = match_map_centers(igm, map_match_centers, y_bounds = (line_min_y, line_max_y))
             #TODO: make distance threshold an argument
@@ -290,7 +295,7 @@ def construct_mosaic_glt_from_igm_line(output_file: str, output_geotransform: tu
         line_glt[np.isnan(line_glt)] = GLT_NODATA_VALUE
         output_memmap = np.memmap(output_file, mode='r+', shape=(size_px[1], 3, size_px[0]), dtype=np.int32)
         output_memmap[line_index, ...] = np.transpose(line_glt)
-        logging.info('Completed line {}/{}'.format(line_index,size_px[1]))
+        logging.info('Completed line {}/{}'.format(line_index-start_line,stop_line-start_line))
         del output_memmap
 
 
@@ -317,12 +322,13 @@ def match_map_centers(igm_input, map_match_centers, y_bounds=None):
 
     map_centers_xy = np.hstack([map_match_centers[0,...].flatten().reshape(-1,1), map_match_centers[1,...].flatten().reshape(-1,1)])
 
-    distance = scipy.spatial.distance.cdist(map_centers_xy, igm_xy, metric='euclidean')
-    del map_centers_xy, igm_xy
+    closest_idx = np.zeros(len(map_centers_xy),dtype=int)
+    closest_distance = np.zeros(len(map_centers_xy))
+    for chunk_index in range(0,len(map_centers_xy),100):
+        distance = scipy.spatial.distance.cdist(map_centers_xy[chunk_index:chunk_index+100,:], igm_xy[chunk_index:chunk_index+100,:], metric='euclidean')
 
-    closest_idx = np.nanargmin(distance,axis=1)
-    closest_distance = np.nanmin(distance,axis=1)
-    del distance
+        closest_idx[chunk_index:chunk_index+100]= np.nanargmin(distance,axis=1)
+        closest_distance[chunk_index:chunk_index+100] = np.nanmin(distance,axis=1)
 
     x_px = np.arange(igm_shape[2])[np.newaxis,:] * np.ones((igm_shape[1],igm_shape[2]))
     y_px = np.arange(igm_shape[1])[:,np.newaxis] * np.ones((igm_shape[1],igm_shape[2]))
