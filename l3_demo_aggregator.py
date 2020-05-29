@@ -20,7 +20,7 @@ parser.add_argument('upscaling_factor',type=int)
 parser.add_argument('-emit_mineral_uncertainty_file')
 parser.add_argument('-fractional_cover_uncertainty_file')
 parser.add_argument('-earth_band',type=int,default=2)
-parser.add_argument('-mineral_bands', metavar='\b', nargs='+', type=int, default=[0,1,2])
+parser.add_argument('-mineral_bands', metavar='\b', nargs='+', type=int, default=[-1,-1,-1])
 args = parser.parse_args()
 
 if len(args.mineral_bands) != 3:
@@ -53,11 +53,11 @@ def load_matching_extents(file_1, file_2, mineral_bands):
     ## load data
     raster_1 = ds1.ReadAsArray(int((ul_x - trans_1[0]) / trans_1[1]),
                                int((ul_y - trans_1[3]) / trans_1[5]),
-                               int(round((lr_x-ul_x)/trans_1[1])), int(round((lr_y-ul_y)/trans_1[5])))[np.array(mineral_bands),...]
+                               int(round((lr_x-ul_x)/trans_1[1])), int(round((lr_y-ul_y)/trans_1[5])))
 
     raster_2 = ds2.ReadAsArray(int((ul_x - trans_2[0]) / trans_2[1]),
                                int((ul_y - trans_2[3]) / trans_2[5]),
-                               int(round((lr_x-ul_x)/trans_2[1])), int(round((lr_y-ul_y)/trans_2[5])))[np.array(mineral_bands),...]
+                               int(round((lr_x-ul_x)/trans_2[1])), int(round((lr_y-ul_y)/trans_2[5])))
 
     return raster_1, raster_2
 
@@ -65,6 +65,17 @@ def load_matching_extents(file_1, file_2, mineral_bands):
 verbose=False
 
 SA, fractional_cover = load_matching_extents(args.emit_mineral_file, args.fractional_cover_file, args.mineral_bands)
+if -1 in args.mineral_bands:
+    data_counts = np.sum(SA > 0,axis=(1,2))
+    band_order = np.argsort(data_counts)[::-1].tolist()
+    band_order = [x for x in band_order if x not in args.mineral_bands]
+    bo_index = 0
+    for _n, band in enumerate(args.mineral_bands):
+        if band == -1:
+            args.mineral_bands[_n] = band_order[bo_index]
+            bo_index +=1
+
+SA = SA[args.mineral_bands,...]
 mineral_band_names = ['Goethite', 'Hematite', 'Kaolinite', 'Dolomite', 'Illite', 'Vermiculite', 'Montmorillonite', 'Gypsum', 'Calcite', 'Chlorite']
 
 # Scale based on bare-earth fraction
@@ -91,6 +102,8 @@ for _y, ypos in enumerate(centers_y):
     for _x, xpos in enumerate(centers_x):
         ASA[:,_y,_x] = np.nanmean(SAp[:,ypos - ws:ypos + ws, xpos - ws: xpos + ws],axis=(1,2))
 
+
+
 fig = plt.figure(figsize=(20, 6))
 shape=(4,1)
 buffer=0.02
@@ -101,7 +114,7 @@ plt_idx = 0
 
 ax = fig.add_axes([buffer*(plt_idx+1) + plt_idx*plt_xsize,buffer + 0*plt_ysize, plt_xsize,plt_ysize], zorder=1)
 to_plot = np.transpose(SA.copy(), (1,2,0))
-ax.imshow(to_plot,vmin=0,vmax=1)
+ax.imshow(to_plot,vmin=0,vmax=0.1)
 ax.set_title('L2b Output \n Spectral Abundance Estimate')
 ax.set_axis_off()
 
@@ -133,7 +146,7 @@ plt_idx += 1
 
 ax = fig.add_axes([buffer*(plt_idx+1) + plt_idx*plt_xsize,buffer + 0*plt_ysize, plt_xsize,plt_ysize], zorder=1)
 to_plot = np.transpose(SAp.copy(), (1,2,0))
-ax.imshow(to_plot,vmin=0,vmax=1)
+ax.imshow(to_plot,vmin=0,vmax=0.1)
 ax.set_title('L3 Intermediate \n Vegetation-Adjusted Spectral Abundance Estimate')
 ax.set_axis_off()
 
@@ -146,7 +159,7 @@ plt_idx += 1
 
 ax = fig.add_axes([buffer*(plt_idx+1) + plt_idx*plt_xsize,buffer + 0*plt_ysize, plt_xsize,plt_ysize], zorder=1)
 to_plot = np.transpose(ASA.copy(), (1,2,0))
-ax.imshow(to_plot,vmin=0,vmax=1)
+ax.imshow(to_plot,vmin=0,vmax=0.1)
 ax.set_title('L3 Output \n Aggregated Spectral Abundance Estimate')
 ax.set_axis_off()
 
@@ -157,7 +170,6 @@ ax.set_axis_off()
 plt_idx += 1
 
 plt.show()
-
 
 
 
