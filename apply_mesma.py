@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore")
 
 
 parser = argparse.ArgumentParser(description='Execute MESMA in parallel over a BIL line')
-parser.add_argument('reflectance_input_file')
+parser.add_argument('reflectance_file')
 parser.add_argument('endmember_file', default='data/urbanspectraandmeta_endmember.csv')
 parser.add_argument('endmember_class')
 parser.add_argument('output_file_base')
@@ -32,10 +32,16 @@ parser.add_argument('-plot_line_spectra', default=-1)
 parser.add_argument('-n_cores', type=int, default=1)
 parser.add_argument('-refl_nodata', type=float, default=-9999)
 parser.add_argument('-refl_scale', type=float, default=2.)
+parser.add_argument('-n_mc', type=float, default=0)
+parser.add_argument('-reflectance_uncertainty_file', type=str, default=None)
 parser.add_argument('-complexity_level', metavar='\b', nargs='+', type=int, default=[3, 4],
                     help='the complexity levels for unmixing. e.g. 2 3 4 for 2-, 3- and 4-EM models (default: 2 3)')
 args = parser.parse_args()
 
+
+if args.n_mc > 0:
+   if args.reflectance_uncertainty_file is None:
+       raise IOError('If n_mc is specified greater than 0, a reflectance_uncertainty_file must be specified.')
 
 
 def get_refl_wavelengths(raster_file):
@@ -53,7 +59,7 @@ endmember_library.filter_by_class()
 endmember_library.scale_library()
 
 # Get reflectance file wavelengths, and interpolate the endmember library to match
-refl_file_bands = get_refl_wavelengths(args.reflectance_input_file)
+refl_file_bands = get_refl_wavelengths(args.reflectance_file)
 endmember_library.interpolate_library_to_new_wavelengths(refl_file_bands.copy())
 
 # Remove endmember
@@ -64,7 +70,7 @@ endmember_library.remove_wavelength_region_inplace(bad_wv_regions, set_as_nans=T
 good_bands = get_good_bands_mask(refl_file_bands, bad_wv_regions)
 
 # Open up the reflectance dataset, store some variables for convenience
-reflectance_dataset = gdal.Open(args.reflectance_input_file, gdal.GA_ReadOnly)
+reflectance_dataset = gdal.Open(args.reflectance_file, gdal.GA_ReadOnly)
 x_len = int(reflectance_dataset.RasterXSize)
 y_len = int(reflectance_dataset.RasterYSize)
 
@@ -144,7 +150,7 @@ for _n in range(len(output_files)):
 def mesma_line(line):
 
     # open the dataset fresh for proper parallel operation, read and remove dataset from memory
-    lds = gdal.Open(args.reflectance_input_file, gdal.GA_ReadOnly)
+    lds = gdal.Open(args.reflectance_file, gdal.GA_ReadOnly)
     img_dat = lds.ReadAsArray(0, int(line), int(x_len), 1).astype(np.float32)[good_bands,...]
     del lds
 
