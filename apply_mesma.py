@@ -33,16 +33,16 @@ parser.add_argument('-plot_line_spectra', default=-1)
 parser.add_argument('-n_cores', type=int, default=1)
 parser.add_argument('-refl_nodata', type=float, default=-9999)
 parser.add_argument('-refl_scale', type=float, default=2.)
-parser.add_argument('-n_mc', type=float, default=0)
+parser.add_argument('-n_mcmc', type=int, default=0)
 parser.add_argument('-reflectance_uncertainty_file', type=str, default=None)
 parser.add_argument('-complexity_level', metavar='\b', nargs='+', type=int, default=[3, 4],
                     help='the complexity levels for unmixing. e.g. 2 3 4 for 2-, 3- and 4-EM models (default: 2 3)')
 args = parser.parse_args()
 
 
-if args.n_mc > 0:
+if args.n_mcmc > 0:
    if args.reflectance_uncertainty_file is None:
-       raise IOError('If n_mc is specified greater than 0, a reflectance_uncertainty_file must be specified.')
+       raise IOError('If n_mcmc is specified greater than 0, a reflectance_uncertainty_file must be specified.')
 
 
 def get_refl_wavelengths(raster_file):
@@ -170,6 +170,16 @@ def mesma_line(line):
                                      em_per_class=models_object.em_per_class,
                                      constraints=[-9999,-9999,-9999,-9999,-9999,-9999,-9999],
                                      )
+
+        mcmc_results = []
+        for mcmc_ind in range(args.n_mcmc):
+            res = core.execute(img_dat,
+                                     endmember_library.spectra.T,
+                                     look_up_table=models_object.return_look_up_table(),
+                                     em_per_class=models_object.em_per_class,
+                                     constraints=[-9999,-9999,-9999,-9999,-9999,-9999,-9999],
+                                     )
+            mcmc_results.append(res[1]/ np.sum(res[1][:n_classes, ...], axis=0)[np.newaxis, ...])
 
         # 'Shade normalize' the fraction output....aka, account for variable surface brightness
         mesma_results[1][:n_classes,...] /= np.sum(mesma_results[1][:n_classes, ...], axis=0)[np.newaxis, ...]
