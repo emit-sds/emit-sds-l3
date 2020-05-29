@@ -37,7 +37,7 @@ def main():
     parser.add_argument('-criteria_band', type=int, default=1)
     parser.add_argument('-n_cores', type=int, default=-1)
     parser.add_argument('-log_file', type=str, default=None)
-    parser.add_argument('-log_level', type=str, default='INFO')
+    parser.add_argument('-log_level', type=str, default='DEBUG')
     parser.add_argument('-start_line', type=int, default=None)
     parser.add_argument('-stop_line', type=int, default=None)
     parser.add_argument('-glt_files', nargs='+', type=str,
@@ -150,7 +150,7 @@ def main():
     for idx_y in range(args.start_line, args.stop_line):
         if args.n_cores == 1:
             construct_mosaic_glt_from_igm_line(args.output_filename, geotransform, igm_files, criteria_files, (x_size_px, y_size_px), file_min_xy,
-                                               file_max_xy, line_breaks[idx_y], line_breaks[idx_y+1])
+                                               file_max_xy, idx_y)
         else:
             results.append(pool.apply_async(construct_mosaic_glt_from_igm_line,
                                             args=(args.output_filename, geotransform, igm_files, criteria_files, (x_size_px, y_size_px), file_min_xy,
@@ -247,21 +247,15 @@ def construct_mosaic_glt_from_igm_line(output_file: str, output_geotransform: tu
         if f_max_xy[1] < line_min_y or f_min_xy[1] > line_max_y:
             continue
 
-        #TODO: Do x checking as well
-
-        # unfortunately, we have to read the whole file in now.
-        #if igms[file_index] is None:
-        #    igm = gdal.Open(igm_file, gdal.GA_ReadOnly).ReadAsArray()
-        #    igms[file_index] = igm
-        #else:
-
         igm = igms[file_index]
-
         # Get source-locations of this file
         #valid_igm = np.all(igm != IGM_NODATA_VALUE, axis=0)
         #igm[:,np.logical_not(valid_igm)] = np.nan
 
         closest_x_px, closest_y_px, closest_distance = match_map_centers(igm, map_match_centers, y_bounds = (line_min_y, line_max_y))
+        if closest_x_px is None:
+            continue
+
         #TODO: make distance threshold an argument
         close_enough = closest_distance < 2*output_geotransform[1]
         closest_x_px = closest_x_px[close_enough]
@@ -336,13 +330,31 @@ def match_map_centers(igm_input, map_match_centers, y_bounds=None):
     map_centers_xy = np.hstack([map_match_centers[0,...].flatten().reshape(-1,1), map_match_centers[1,...].flatten().reshape(-1,1)])
 
     closest_idx = np.zeros(len(map_centers_xy),dtype=int)
-    closest_distance = np.zeros(len(map_centers_xy))
+    closest_distance = np.zeros(len(map_centers_xy))+1e12
+    igm_x_bounds = [np.nanmin(igm_xy[:,0]),np.nanmax(igm_xy[:,0])]
+    igm_y_bounds = [np.nanmin(igm_xy[:,1]),np.nanmax(igm_xy[:,1])]
+    if igm_x_bounds[0] > np.nanmax(map_centers_xy[:,0]) or\
+       igm_x_bounds[1] < np.nanmin(map_centers_xy[:,0]) or\
+       igm_y_bounds[0] > np.nanmax(map_centers_xy[:,1]) or\
+       igm_y_bounds[1] < np.nanmin(map_centers_xy[:,1]):
+       return None, None, None
+
     chunksize = 10
     for chunk_index in range(0,len(map_centers_xy),chunksize):
-        distance = scipy.spatial.distance.cdist(map_centers_xy[chunk_index:chunk_index+chunksize,:], igm_xy, metric='euclidean')
 
-        closest_idx[chunk_index:chunk_index+chunksize]= np.nanargmin(distance,axis=1)
-        closest_distance[chunk_index:chunk_index+chunksize] = np.nanmin(distance,axis=1)
+        if igm_x_bounds[0] > np.nanmax(map_centers_xy[chunk_index:chunk_index+chunksize,0]) or\
+           igm_x_bounds[1] < np.nanmin(map_centers_xy[chunk_index:chunk_index+chunksize,0]) or\
+           igm_y_bounds[0] > np.nanmax(map_centers_xy[chunk_index:chunk_index+chunksize,1]) or\
+           igm_y_bounds[1] < np.nanmin(map_centers_xy[chunk_index:chunk_index+chunksize,1]):
+
+            closest_idx[chunk_index:chunk_index+chunksize]= 0
+            closest_distance[chunk_index:chunk_index+chunksize] = 1e12
+        else: 
+            distance = scipy.spatial.distance.cdist(map_centers_xy[chunk_index:chunk_index+chunksize,:], igm_xy, metric='euclidean')
+
+            closest_idx[chunk_index:chunk_index+chunksize]= np.nanargmin(distance,axis=1)
+            closest_distance[chunk_index:chunk_index+chunksize] = np.nanmin(distance,axis=1)
+        logging.debug('chunk {}/{} finished.'.format(chunk_index,len(map_centers_xy)))
 
     x_px = np.arange(igm_shape[2])[np.newaxis,:] * np.ones((igm_shape[1],igm_shape[2]))
     y_px = np.arange(igm_shape[1])[:,np.newaxis] * np.ones((igm_shape[1],igm_shape[2]))
