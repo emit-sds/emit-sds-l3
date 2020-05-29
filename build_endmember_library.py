@@ -12,9 +12,11 @@ Spectral will be convolved to match the
 Written by: Philip G. Brodrick
 """
 
+import argparse
 import numpy as np
 import pandas as pd
 import os
+import logging
 from mesma.square_array import SquareArray
 from mesma.ear_masa_cob import EarMasaCob
 
@@ -67,7 +69,7 @@ class SpectralLibrary():
 
     def filter_by_class(self):
         if self.class_valid_keys is None:
-            print('No class valid keys provided, no filtering occuring')
+            logging.info('No class valid keys provided, no filtering occuring')
             return
 
         valid_classes = np.zeros(self.spectra.shape[0]).astype(bool)
@@ -106,59 +108,71 @@ class SpectralLibrary():
         self.spectra = self.spectra / np.sqrt(np.nanmean(np.power(self.spectra,2),axis=1))[:,np.newaxis]
 
 
-bad_wv_regions = [[0,440],[1310,1490],[1770,2050],[2440,2880]]
-spectra_per_class = 6
+def main():
+    parser = argparse.ArgumentParser(description='Execute MESMA in parallel over a BIL line')
+    parser.add_argument('--spectral_data_files',type=str,default=['data/urbanspectraandmeta.csv'],nargs='+')
+    parser.add_argument('--class_names',type=str,default=['Level_2'],nargs='+')
+    args = parser.parse_args()
 
-# Create list of all spectral libraries to use
-libraries = []
-libraries.append(SpectralLibrary('data/urbanspectraandmeta.csv', 'Level_2',
-                                  np.arange(350, 2499, 2).astype(int).astype(str),
-                                  np.arange(350, 2499, 2).astype(np.float32),
-                                  scale_factor=10000.))
+    if len(args.spectral_data) != len(args.class_name):
+        raise AttributeError('Length of input spectral_data must equal input class_name')
 
+    bad_wv_regions = [[0,440],[1310,1490],[1770,2050],[2440,2880]]
+    spectra_per_class = 6
 
-# Open and filter spectral libraries
-for _f in range(len(libraries)):
-    libraries[_f].load_data()
-    libraries[_f].filter_by_class()
-    libraries[_f].scale_library()
-    libraries[_f].remove_wavelength_region_inplace(bad_wv_regions,set_as_nans=True)
-
-# Now run EAR on each library (independently), and assemble the desired number of classes
-ear_masa_cobs = []
-for _f in range(len(libraries)):
-
-    square_output = SquareArray().execute(library=libraries[_f].spectra.T[libraries[_f].good_bands,:], constraints=(-9999, -9999, -9999), out_constraints=True, out_angle=True, out_rmse=True)
-
-    emc = EarMasaCob().execute(spectral_angle_band=square_output['spectral angle'], rmse_band=square_output['rmse'],
-                               constraints_band=square_output['constraints'], class_list=libraries[_f].classes)
-
-    ear_masa_cobs.append(emc)
-
-    ear = emc[0]
-    out_df = pd.read_csv(libraries[_f].file_name)
-    out_df['EAR'] = emc[0]
-    out_df['MASA'] = emc[1]
-    out_df['InCOB'] = emc[2]
-    out_df['OutCOB'] = emc[3]
-    out_df['COBI'] = emc[4]
-
-    good_data = np.zeros(libraries[_f].spectra.shape[0]).astype(bool)
-    for cla in libraries[_f].class_valid_keys:
-        subset = libraries[_f].classes == cla
-        to_sort = ear.copy()
-        to_sort[np.logical_not(subset)] = np.nan
-
-        order = np.argsort(to_sort)
-
-        good_data[order[:spectra_per_class]] = True
-
-    out_df = out_df.loc[good_data,:]
-    out_df.to_csv(os.path.splitext(libraries[_f].file_name)[0] + '_endmember.csv', index=False)
+    # Create list of all spectral libraries to use
+    libraries = []
+    for datafile, cla in zip(args.spectral_data_files,args.class_names):
+        libraries.append(SpectralLibrary(datafile, cla,
+                                         np.arange(350, 2499, 2).astype(int).astype(str),
+                                         np.arange(350, 2499, 2).astype(np.float32),
+                                         scale_factor=10000.))
 
 
+    # Open and filter spectral libraries
+    for _f in range(len(libraries)):
+        libraries[_f].load_data()
+        libraries[_f].filter_by_class()
+        libraries[_f].scale_library()
+        libraries[_f].remove_wavelength_region_inplace(bad_wv_regions,set_as_nans=True)
 
-    
+    # Now run EAR on each library (independently), and assemble the desired number of classes
+    ear_masa_cobs = []
+    for _f in range(len(libraries)):
+
+        square_output = SquareArray().execute(library=libraries[_f].spectra.T[libraries[_f].good_bands,:], constraints=(-9999, -9999, -9999), out_constraints=True, out_angle=True, out_rmse=True)
+
+        emc = EarMasaCob().execute(spectral_angle_band=square_output['spectral angle'], rmse_band=square_output['rmse'],
+                                   constraints_band=square_output['constraints'], class_list=libraries[_f].classes)
+
+        ear_masa_cobs.append(emc)
+
+        ear = emc[0]
+        out_df = pd.read_csv(libraries[_f].file_name)
+        out_df['EAR'] = emc[0]
+        out_df['MASA'] = emc[1]
+        out_df['InCOB'] = emc[2]
+        out_df['OutCOB'] = emc[3]
+        out_df['COBI'] = emc[4]
+
+        good_data = np.zeros(libraries[_f].spectra.shape[0]).astype(bool)
+        for cla in libraries[_f].class_valid_keys:
+            subset = libraries[_f].classes == cla
+            to_sort = ear.copy()
+            to_sort[np.logical_not(subset)] = np.nan
+
+            order = np.argsort(to_sort)
+
+            good_data[order[:spectra_per_class]] = True
+
+        out_df = out_df.loc[good_data,:]
+        out_df.to_csv(os.path.splitext(libraries[_f].file_name)[0] + '_endmember.csv', index=False)
+
+
+
+
+if __name__ == "__main__":
+    main()
 
 
 

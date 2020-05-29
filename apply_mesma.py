@@ -15,6 +15,7 @@ from tqdm import tqdm
 import multiprocessing
 from build_endmember_library import SpectralLibrary, get_good_bands_mask, bad_wv_regions
 import matplotlib.pyplot as plt
+import logging
 from mesma import mesma
 
 # MESMA throws a series of divide-by-zero errors that produce objectionable output, and can be safely ignored
@@ -87,7 +88,7 @@ if (args.build_plots == 1):
 
     if (args.plot_line_spectra > 0):
         if (args.plot_line_spectra > y_len):
-            print('Line for plotting, {}, exceeds file length, {}.  Skipping'.format(args.plot_line_spectra, y_len))
+            logging.info('Line for plotting, {}, exceeds file length, {}.  Skipping'.format(args.plot_line_spectra, y_len))
 
         line = np.squeeze(reflectance_dataset.ReadAsArray(0, 1000, x_len, 1))
         line = line[:, np.all(line != args.refl_nodata, axis=0)]
@@ -127,7 +128,7 @@ for level in args.complexity_level:
     for i in np.arange(n_classes):
         models_object.select_class(state=True, index=i, level=level)
 
-print("Total number of models: " + str(models_object.total()))
+logging.info("Total number of models: " + str(models_object.total()))
 
 # Set up output files
 n_fraction_bands = n_classes + 1
