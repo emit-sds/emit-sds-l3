@@ -110,8 +110,8 @@ class SpectralLibrary():
 
 def main():
     parser = argparse.ArgumentParser(description='Execute MESMA in parallel over a BIL line')
-    parser.add_argument('--spectral_data_files',type=str,default=['data/urbanspectraandmeta.csv'],nargs='+')
-    parser.add_argument('--class_names',type=str,default=['Level_2'],nargs='+')
+    parser.add_argument('-spectral_data_files',type=str,default=['data/urbanspectraandmeta.csv'],nargs='+')
+    parser.add_argument('-class_names',type=str,default=['Level_2'],nargs='+')
     args = parser.parse_args()
 
     if len(args.spectral_data) != len(args.class_name):
