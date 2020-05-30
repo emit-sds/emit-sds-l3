@@ -20,6 +20,8 @@ import logging
 from mesma.square_array import SquareArray
 from mesma.ear_masa_cob import EarMasaCob
 
+bad_wv_regions = [[0,440],[1310,1490],[1770,2050],[2440,2880]]
+
 def get_good_bands_mask(wavelengths, wavelength_pairs):
     good_bands = np.ones(len(wavelengths)).astype(bool)
 
@@ -117,7 +119,6 @@ def main():
     if len(args.spectral_data) != len(args.class_name):
         raise AttributeError('Length of input spectral_data must equal input class_name')
 
-    bad_wv_regions = [[0,440],[1310,1490],[1770,2050],[2440,2880]]
     spectra_per_class = 6
 
     # Create list of all spectral libraries to use

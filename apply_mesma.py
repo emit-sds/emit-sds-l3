@@ -33,16 +33,16 @@ parser.add_argument('-plot_line_spectra', default=-1)
 parser.add_argument('-n_cores', type=int, default=1)
 parser.add_argument('-refl_nodata', type=float, default=-9999)
 parser.add_argument('-refl_scale', type=float, default=2.)
-parser.add_argument('-n_mcmc', type=int, default=0)
+parser.add_argument('-n_mc', type=int, default=0)
 parser.add_argument('-reflectance_uncertainty_file', type=str, default=None)
 parser.add_argument('-complexity_level', metavar='\b', nargs='+', type=int, default=[3, 4],
                     help='the complexity levels for unmixing. e.g. 2 3 4 for 2-, 3- and 4-EM models (default: 2 3)')
 args = parser.parse_args()
 
 
-if args.n_mcmc > 0:
+if args.n_mc > 0:
    if args.reflectance_uncertainty_file is None:
-       raise IOError('If n_mcmc is specified greater than 0, a reflectance_uncertainty_file must be specified.')
+       raise IOError('If n_mc is specified greater than 0, a reflectance_uncertainty_file must be specified.')
 
 
 def get_refl_wavelengths(raster_file):
@@ -130,6 +130,8 @@ for level in args.complexity_level:
 
 logging.info("Total number of models: " + str(models_object.total()))
 
+np.random.seed(13)
+
 # Set up output files
 n_fraction_bands = n_classes + 1
 n_model_bands = n_classes
@@ -137,6 +139,10 @@ n_rmse_bands = 1
 
 output_files = [args.output_file_base + '_model', args.output_file_base + '_fraction', args.output_file_base + '_rmse']
 output_bands = [n_model_bands, n_fraction_bands, n_rmse_bands]
+
+if args.n_mc > 0:
+    output_files.append(args.output_file_base + '_mc_variation')
+    output_bands.append(n_fraction_bands)
 driver = gdal.GetDriverByName('ENVI')
 driver.Register()
 
@@ -155,31 +161,44 @@ def mesma_line(line):
     img_dat = lds.ReadAsArray(0, int(line), int(x_len), 1).astype(np.float32)[good_bands,...]
     del lds
 
+    if args.reflectance_uncertainty_file is not None:
+        lds = gdal.Open(args.reflectance_uncertainty_file, gdal.GA_ReadOnly)
+        unc_dat = lds.ReadAsArray(0, int(line), int(x_len), 1).astype(np.float32)[good_bands,...]
+        del lds
+
     # Check from nodata regions
     good_data = np.squeeze(np.all(img_dat != args.refl_nodata,axis=0))
 
     if np.sum(good_data) > 0:
         img_dat = img_dat[...,good_data]
+        unc_dat = unc_dat[...,good_data]
         #img_dat = img_dat / np.sqrt(np.nanmean(np.power(img_dat,2),axis=1))[:,np.newaxis]
         img_dat /= args.refl_scale
+        unc_dat /= args.refl_scale
 
         core = mesma.MesmaCore()
-        mesma_results = core.execute(img_dat,
+        mesma_results = list(core.execute(img_dat,
                                      endmember_library.spectra.T,
                                      look_up_table=models_object.return_look_up_table(),
                                      em_per_class=models_object.em_per_class,
                                      constraints=[-9999,-9999,-9999,-9999,-9999,-9999,-9999],
-                                     )
+                                     ))
 
-        mcmc_results = []
-        for mcmc_ind in range(args.n_mcmc):
-            res = core.execute(img_dat,
-                                     endmember_library.spectra.T,
-                                     look_up_table=models_object.return_look_up_table(),
-                                     em_per_class=models_object.em_per_class,
-                                     constraints=[-9999,-9999,-9999,-9999,-9999,-9999,-9999],
-                                     )
-            mcmc_results.append(res[1]/ np.sum(res[1][:n_classes, ...], axis=0)[np.newaxis, ...])
+        if args.n_mc > 0:
+            mc_results = []
+            for mc_ind in range(args.n_mc):
+                noise = np.random.random(img_dat.shape)*unc_dat*2 - unc_dat
+                res = core.execute(img_dat + noise,
+                                         endmember_library.spectra.T,
+                                         look_up_table=models_object.return_look_up_table(),
+                                         em_per_class=models_object.em_per_class,
+                                         constraints=[-9999,-9999,-9999,-9999,-9999,-9999,-9999],
+                                         )
+                mc_results.append(res[1]/ np.sum(res[1][:n_classes, ...], axis=0)[np.newaxis, ...])
+       
+            
+            mc_frac_variation = np.std(np.stack(mc_results),axis=0)
+            mesma_results.append(mc_frac_variation)
 
         # 'Shade normalize' the fraction output....aka, account for variable surface brightness
         mesma_results[1][:n_classes,...] /= np.sum(mesma_results[1][:n_classes, ...], axis=0)[np.newaxis, ...]
@@ -209,10 +228,15 @@ pool = multiprocessing.Pool(processes=args.n_cores)
 # Run asynchronously
 results = []
 for l in np.arange(0, y_len).astype(int):
-    results.append(pool.apply_async(mesma_line, args=(l,), callback=progress_update))
-results = [p.get() for p in results]
-pool.close()
-pool.join()
+    if args.n_cores > 1:
+        results.append(pool.apply_async(mesma_line, args=(l,), callback=progress_update))
+    else:
+        mesma_line(l)
+
+if args.n_cores > 1:
+    results = [p.get() for p in results]
+    pool.close()
+    pool.join()
 
 
 
