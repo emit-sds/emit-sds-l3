@@ -183,6 +183,7 @@ def mesma_line(line):
                                      em_per_class=models_object.em_per_class,
                                      constraints=[-9999,-9999,-9999,-9999,-9999,-9999,-9999],
                                      ))
+        mesma_results[1][mesma_results[1] < 0] = 0
 
         if args.n_mc > 0:
             mc_results = []
@@ -194,6 +195,7 @@ def mesma_line(line):
                                          em_per_class=models_object.em_per_class,
                                          constraints=[-9999,-9999,-9999,-9999,-9999,-9999,-9999],
                                          )
+                res[1][res[1] < 0] = 0
                 mc_results.append(res[1]/ np.sum(res[1][:n_classes, ...], axis=0)[np.newaxis, ...])
        
             
