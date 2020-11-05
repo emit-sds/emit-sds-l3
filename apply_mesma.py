@@ -17,6 +17,8 @@ from build_endmember_library import SpectralLibrary, get_good_bands_mask, bad_wv
 import matplotlib.pyplot as plt
 import logging
 from mesma import mesma
+from spectral.io import envi
+import ray
 
 # MESMA throws a series of divide-by-zero errors that produce objectionable output, and can be safely ignored
 import warnings
@@ -46,15 +48,17 @@ if args.n_mc > 0:
 
 
 def get_refl_wavelengths(raster_file):
-    ds = gdal.Open(raster_file, gdal.GA_ReadOnly)
-    metadata = ds.GetMetadata()
-    wavelengths = np.array([float(metadata['Band_' + str(x)]) for x in range(1,ds.RasterCount+1)])
+    ds = envi.open(raster_file + '.hdr')
+    wavelengths = np.array([float(x) for x in ds.metadata['wavelength']])
+    #ds = gdal.Open(raster_file, gdal.GA_ReadOnly)
+    #metadata = ds.GetMetadata()
+    #wavelengths = np.array([float(metadata['Band_' + str(x)]) for x in range(1,ds.RasterCount+1)])
     return wavelengths
 
 # Load endmember library
 endmember_library = SpectralLibrary(args.endmember_file, args.endmember_class,
                                     np.arange(350, 2499, 2).astype(int).astype(str), np.arange(350, 2499, 2),
-                                    class_valid_keys=['NPV', 'GV', 'SOIL'], scale_factor=20000.)
+                                    class_valid_keys=['NPV', 'GV', 'SOIL','roof','coating','paved'], scale_factor=20000.)
 endmember_library.load_data()
 endmember_library.filter_by_class()
 endmember_library.scale_library()
@@ -146,12 +150,12 @@ if args.n_mc > 0:
 driver = gdal.GetDriverByName('ENVI')
 driver.Register()
 
-for _n in range(len(output_files)):
-    outDataset = driver.Create(output_files[_n], x_len, y_len, output_bands[_n], gdal.GDT_Float32,
-                               options=['INTERLEAVE=BIL'])
-    outDataset.SetGeoTransform(reflectance_dataset.GetGeoTransform())
-    outDataset.SetProjection(reflectance_dataset.GetProjection())
-    del outDataset
+#for _n in range(len(output_files)):
+#    outDataset = driver.Create(output_files[_n], x_len, y_len, output_bands[_n], gdal.GDT_Float32,
+#                               options=['INTERLEAVE=BIL'])
+#    outDataset.SetGeoTransform(reflectance_dataset.GetGeoTransform())
+#    outDataset.SetProjection(reflectance_dataset.GetProjection())
+#    del outDataset
 
 # Define a function to run Mesma on one line of data
 def mesma_line(line):
@@ -229,7 +233,7 @@ pool = multiprocessing.Pool(processes=args.n_cores)
 
 # Run asynchronously
 results = []
-for l in np.arange(0, y_len).astype(int):
+for l in np.arange(5000, y_len).astype(int):
     if args.n_cores > 1:
         results.append(pool.apply_async(mesma_line, args=(l,), callback=progress_update))
     else:
