@@ -150,14 +150,20 @@ if args.n_mc > 0:
 driver = gdal.GetDriverByName('ENVI')
 driver.Register()
 
-#for _n in range(len(output_files)):
-#    outDataset = driver.Create(output_files[_n], x_len, y_len, output_bands[_n], gdal.GDT_Float32,
-#                               options=['INTERLEAVE=BIL'])
-#    outDataset.SetGeoTransform(reflectance_dataset.GetGeoTransform())
-#    outDataset.SetProjection(reflectance_dataset.GetProjection())
-#    del outDataset
+for _n in range(len(output_files)):
+    outDataset = driver.Create(output_files[_n], x_len, y_len, output_bands[_n], gdal.GDT_Float32,
+                               options=['INTERLEAVE=BIL'])
+    outDataset.SetGeoTransform(reflectance_dataset.GetGeoTransform())
+    outDataset.SetProjection(reflectance_dataset.GetProjection())
+    del outDataset
+
+# Set up progress bar for output
+progress_bar = tqdm(total=y_len / args.n_cores, ncols=80)
+def progress_update(*a):
+    progress_bar.update()
 
 # Define a function to run Mesma on one line of data
+@ray.remote
 def mesma_line(line):
 
     # open the dataset fresh for proper parallel operation, read and remove dataset from memory
@@ -209,40 +215,59 @@ def mesma_line(line):
         # 'Shade normalize' the fraction output....aka, account for variable surface brightness
         mesma_results[1][:n_classes,...] /= np.sum(mesma_results[1][:n_classes, ...], axis=0)[np.newaxis, ...]
 
+        progress_update()
+        return line, mesma_results, good_data
         # Open each dataset, re-order the binary data for BIL write, and dump to file
-        for _n in range(len(output_files)):
-            lr = mesma_results[_n].copy()
-            if (len(lr.shape) == 2):
-                lr = lr.reshape((1, lr.shape[0], lr.shape[1]))
-            lr = lr.swapaxes(0,1)
+        #for _n in range(len(output_files)):
+        #    lr = mesma_results[_n].copy()
+        #    if (len(lr.shape) == 2):
+        #        lr = lr.reshape((1, lr.shape[0], lr.shape[1]))
+        #    lr = lr.swapaxes(0,1)
 
-            write_lock.acquire()  
-            memmap = np.memmap(output_files[_n], mode='r+', shape=(y_len, output_bands[_n], x_len), dtype=np.float32)
-            memmap[line:line+1,:,good_data] = lr
-            write_lock.release()
-            del memmap
+        #    write_lock.acquire()  
+        #    memmap = np.memmap(output_files[_n], mode='r+', shape=(y_len, output_bands[_n], x_len), dtype=np.float32)
+        #    memmap[line:line+1,:,good_data] = lr
+        #    write_lock.release()
+        #    del memmap
 
-# Set up progress bar for output
-progress_bar = tqdm(total=y_len, ncols=80)
-def progress_update(*a):
-    progress_bar.update()
+
 
 # Establish a write-lock....not strictly necessary, but for formality
-write_lock = multiprocessing.Lock()
-pool = multiprocessing.Pool(processes=args.n_cores)
+#write_lock = multiprocessing.Lock()
+#pool = multiprocessing.Pool(processes=args.n_cores)
+ray.init()
 
 # Run asynchronously
-results = []
-for l in np.arange(5000, y_len).astype(int):
+jobs = []
+for l in np.arange(y_len).astype(int):
     if args.n_cores > 1:
-        results.append(pool.apply_async(mesma_line, args=(l,), callback=progress_update))
+        #results.append(pool.apply_async(mesma_line, args=(l,), callback=progress_update))
+        jobs.append(mesma_line.remote(l))
     else:
-        mesma_line(l)
+        jobs.append(mesma_line(l))
 
 if args.n_cores > 1:
-    results = [p.get() for p in results]
-    pool.close()
-    pool.join()
+    results = [ray.get(job) for job in jobs]
+
+
+for _n in range(len(output_files)):
+    logging.info(f'Writing output file {output_files[_n]}')
+    memmap = np.memmap(output_files[_n], mode='r+', shape=(y_len, output_bands[_n], x_len), dtype=np.float32)
+    for res in results:
+        line = res[0]
+        lr = res[1][_n].copy()
+        good_data = res[2]
+        if (len(lr.shape) == 2):
+            lr = lr.reshape((1, lr.shape[0], lr.shape[1]))
+        lr = lr.swapaxes(0,1)
+
+        memmap[line:line+1,:,good_data] = lr
+    del memmap
+
+#if args.n_cores > 1:
+#    results = [p.get() for p in results]
+#    pool.close()
+#    pool.join()
 
 
 

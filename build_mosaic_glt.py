@@ -445,5 +445,25 @@ def construct_mosaic_glt_line(output_file: str, glt_files: np.array, criteria_fi
     output_memmap[line_index, ...] = np.transpose(line_glt)
     del output_memmap
 
+
+def _write_bil_chunk(dat: np.array, outfile: str, line: int, shape: tuple, dtype: str = 'float32') -> None:
+    """
+    Write a chunk of data to a binary, BIL formatted data cube.
+    Args:
+        dat: data to write
+        outfile: output file to write to
+        line: line of the output file to write to
+        shape: shape of the output file
+        dtype: output data type
+
+    Returns:
+        None
+    """
+    outfile = open(outfile, 'rb+')
+    outfile.seek(line * shape[1] * shape[2] * np.dtype(dtype).itemsize)
+    outfile.write(dat.astype(dtype).tobytes())
+    outfile.close()
+
+
 if __name__ == "__main__":
     main()
