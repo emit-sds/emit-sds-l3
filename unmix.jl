@@ -31,7 +31,7 @@ function main()
     add_argument!(parser, "--combination_type", type = String, default = "class-even", help = "style of combinations.  Options = [all, class-even]")
     add_argument!(parser, "--max_combinations", type = Int64, default = -1, help = "set the maximum number of enmember combinations (relevant only to mesma)")
     add_argument!(parser, "--num_endmembers", type = Int64, default = [3], nargs="+", help = "set the maximum number of enmember combinations (relevant only to mesma)")
-    add_argument!(parser, "--write_complete_fractions", type=Bool, default = true, help = "flag to indicate if per-endmember fractions should be written out")
+    add_argument!(parser, "--write_complete_fractions", type=Bool, default = 0, help = "flag to indicate if per-endmember fractions should be written out")
     add_argument!(parser, "--log_file", type = String, default = nothing, help = "log file to write to")
     args = parse_args(parser)
 
@@ -133,7 +133,7 @@ function main()
         push!(output_files,string(args.output_file_base , "_fractional_cover_uncertainty") )
     end
 
-    if args.write_complete_fractions == true
+    if args.write_complete_fractions == 1
         push!(output_bands, size(endmember_library.spectra)[1] + 1)
         push!(output_files,string(args.output_file_base , "_complete_fractions") )
     end
@@ -179,7 +179,9 @@ function main()
     # Write primary output
     output = zeros(y_len, x_len, output_bands[1]) .- 9999
     for res in results
-        output[res[1],res[3], :] = res[2]
+        if isnothing(res[2]) == false
+            output[res[1],res[3], :] = res[2]
+        end
     end
     output = permutedims( output, (2,1,3))
     ArchGDAL.write!(outDatasets[1], output, [1:size(output)[end];], 0, 0, size(output)[1], size(output)[2])
@@ -191,7 +193,9 @@ function main()
     if args.n_mc > 1
         output = zeros(y_len, x_len, output_bands[ods_idx]) .- 9999
         for res in results
-            output[res[1],res[3], :] = res[4]
+            if isnothing(res[4]) == false
+                output[res[1],res[3], :] = res[4]
+            end
         end
 
         output = permutedims( output, (2,1,3))
@@ -201,10 +205,12 @@ function main()
     end
 
     # Write complete fraction output
-    if args.write_complete_fractions
+    if args.write_complete_fractions == 1
         output = zeros(y_len, x_len, output_bands[ods_idx]) .- 9999
         for res in results
-            output[res[1],res[3], :] = res[5]
+            if isnothing(res[5])
+                output[res[1],res[3], :] = res[5]
+            else
         end
 
         output = permutedims( output, (2,1,3))
@@ -280,7 +286,7 @@ end
         end
 
         if isnothing(img_dat)
-            return img_dat, unc_dat, good_data, nothing
+            return line, nothing, good_data, nothing, nothing
         end
         img_dat = img_dat ./ refl_scale
 
