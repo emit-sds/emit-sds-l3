@@ -60,9 +60,9 @@ function main()
     end
     Logging.global_logger(logger)
 
-    if ! (args["criteria_mode"] ! in ["min","max","distance"])
-        error("Invalid criteria_mode, expected on of min, max, distance")
-    end
+    #if ! (args["criteria_mode"] ! in ["min","max","distance"])
+    #    error("Invalid criteria_mode, expected on of min, max, distance")
+    #end
 
     igm_files = readdlm(args["igm_file_list"], String)
     if args["criteria_mode"] != "distance"
@@ -70,17 +70,18 @@ function main()
         # TODO: add check to make sure criteria file dimensions match igm file dimensions
     end
 
-    min_x, max_y, max_x, min_y = get_bounding_extent_igms(igm_files)
-    @info "IGM bounds: $min_x, $max_y, $max_x, $min_y"
     if length(args["target_extent_ul_lr"]) > 0
         ullr = args["target_extent_ul_lr"]
-        min_x = min(min_x, ullr[0])
-        max_y = max(max_y, ullr[1])
-        max_x = max(max_x, ullr[2])
-        min_y = min(min_y, ullr[3])
+        min_x = ullr[1]
+        max_y = ullr[2]
+        max_x = ullr[3]
+        min_y = ullr[4]
+    else
+        min_x, max_y, max_x, min_y = get_bounding_extent_igms(igm_files)
     end
-    @info "Tap to a regular Grid"
+    @info "IGM bounds: $min_x, $max_y, $max_x, $min_y"
 
+    @info "Tap to a regular Grid"
     min_x = tap_bounds(min_x, target_resolution[1], "down")
     max_y = tap_bounds(max_y, target_resolution[2], "up")
     max_x = tap_bounds(max_x, target_resolution[1], "up")
@@ -106,41 +107,64 @@ function main()
     best = fill(1e12, y_size_px, x_size_px, 4)
     best[..,1:3] .= -9999
 
-    max_offset_distance = sqrt(sum(target_resolution.^2))
+    max_offset_distance = sqrt(sum(target_resolution.^2))*3
+    pixel_buffer_window = 1
 
     total_found = 0
     for (file_idx, igm_file) in enumerate(igm_files)
         @info "$igm_file"
         dataset = ArchGDAL.read(igm_file)
-        criteria_dataset = ArchGDAL.read(criteria_files[file_idx])
         igm = PermutedDimsArray(ArchGDAL.read(dataset), (2,1,3))
+        if minimum(igm[..,1]) > grid[1,end-1,1] || maximum(igm[..,1]) < grid[1,1,1] ||
+           minimum(igm[..,2]) > grid[1,1,2] || maximum(igm[..,2]) < grid[end-1,1,2]
+            #println(minimum(igm[..,1]), " > ", grid[1,end-1,1], " ", maximum(igm[..,1]), " < ", grid[1,1,1])
+            #println(minimum(igm[..,2]), " > ", grid[1,1,2], " ", maximum(igm[..,2]), " < ", grid[end-1,1,2])
+            continue
+        else
+            println("Entering")
+        end
         if args["criteria_mode"] != "distance"
+            criteria_dataset = ArchGDAL.read(criteria_files[file_idx])
             criteria = PermutedDimsArray(ArchGDAL.read(criteria_dataset, args["criteria_band"]), (2,1))
         end
         for _y=1:size(igm)[1]
             for _x=1:size(igm)[2]
                 pt = igm[_y,_x,1:2]
-                closest = Array{Int64}([round((pt[2] - grid[1,1,2]) / target_resolution[2]), round((pt[1] - grid[1,1,1]) / target_resolution[1])  ]) .+ 1
-                dist = sum((grid[closest[1],closest[2],:] - pt).^2)
+                closest_t = Array{Int64}([round((pt[2] - grid[1,1,2]) / target_resolution[2]), 
+                                        round((pt[1] - grid[1,1,1]) / target_resolution[1])  ]) .+ 1
 
-                if dist < max_offset_distance
+                closest = zeros(Int64,2)
+                for xbuffer in -pixel_buffer_window:pixel_buffer_window
+                    for ybuffer in -pixel_buffer_window:pixel_buffer_window
+                        closest[1] = closest_t[1] + xbuffer
+                        closest[2] = closest_t[2] + ybuffer
 
-                    if args["criteria_mode"] in ["distance", "min"]
-                        if args["criteria_mode"] == "distance"
-                            current_crit = dist
-                        else
-                            current_crit = criteria[closest[1], closest[2]]
+                        
+                        if closest[1] < 1 || closest[2] < 1 || closest[1] > size(grid)[1] || closest[2] > size(grid)[2]
+                            continue
                         end
+                        dist = sum((grid[closest[1],closest[2],:] - pt).^2)
 
-                        if current_crit < best[closest[1], closest[2], 4]
-                            best[closest[1], closest[2], 1:3] = [_y, _x, file_idx]
-                            best[closest[1], closest[2], 4] = current_crit
-                        end
-                    elseif args["criteria_mode"] == "max"
-                        current_crit = criteria[closest[1], closest[2]]
-                        if current_crit > best[closest[1], closest[2], 4]
-                            best[closest[1], closest[2], 1:3] = [_y, _x, file_idx]
-                            best[closest[1], closest[2], 4] = current_crit
+                        if dist < max_offset_distance
+
+                            if args["criteria_mode"] in ["distance", "min"]
+                                if args["criteria_mode"] == "distance"
+                                    current_crit = dist
+                                else
+                                    current_crit = criteria[closest[1], closest[2]]
+                                end
+
+                                if current_crit < best[closest[1], closest[2], 4]
+                                    best[closest[1], closest[2], 1:3] = [_x, _y, file_idx]
+                                    best[closest[1], closest[2], 4] = current_crit
+                                end
+                            elseif args["criteria_mode"] == "max"
+                                current_crit = criteria[closest[1], closest[2]]
+                                if current_crit > best[closest[1], closest[2], 4]
+                                    best[closest[1], closest[2], 1:3] = [_x, _y, file_idx]
+                                    best[closest[1], closest[2], 4] = current_crit
+                                end
+                            end
                         end
                     end
                 end
