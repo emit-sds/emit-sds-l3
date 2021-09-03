@@ -1,7 +1,7 @@
 
 using Test
     
-include("../emit_sds_l3/endmember_library.jl")
+include("../src/endmember_library.jl")
 
 datafile = "data/basic_endmember_library.csv"
 classname = "Class"
