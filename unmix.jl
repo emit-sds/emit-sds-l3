@@ -28,9 +28,10 @@ function main()
     add_argument!(parser, "--mode", type = String, default = "sma", help = "operating mode.  Options = [sma, mesma, plot_endmembers]")
     add_argument!(parser, "--refl_nodata", type = Float64, default = -9999.0, help = "nodata value expected in input reflectance data")
     add_argument!(parser, "--refl_scale", type = Float64, default = 1.0, help = "scale image data (divide it by) this amount")
+    add_argument!(parser, "--normalization", type = String, default = "none", help = "flag to indicate the scaling type. Options = [none, brightness, specific wavelength]")
     add_argument!(parser, "--combination_type", type = String, default = "class-even", help = "style of combinations.  Options = [all, class-even]")
     add_argument!(parser, "--max_combinations", type = Int64, default = -1, help = "set the maximum number of enmember combinations (relevant only to mesma)")
-    add_argument!(parser, "--num_endmembers", type = Int64, default = [3], nargs="+", help = "set the maximum number of enmember combinations (relevant only to mesma)")
+    add_argument!(parser, "--num_endmembers", type = Int64, default = [3], nargs="+", help = "set the maximum number of enmember to use")
     add_argument!(parser, "--write_complete_fractions", type=Bool, default = 0, help = "flag to indicate if per-endmember fractions should be written out")
     add_argument!(parser, "--log_file", type = String, default = nothing, help = "log file to write to")
     args = parse_args(parser)
@@ -169,9 +170,11 @@ function main()
     spectra = convert(Array{Float64},endmember_library.spectra)
     classes = convert(Vector{String},endmember_library.classes)
     un_classes = convert(Vector{String},endmember_library.unique_classes)
+    wavelengths = convert(Vector{Float64}, endmember_library.wavelengths)
 
 
-    results = pmap(line->mesma_line(line,args.reflectance_file, args.mode, args.refl_nodata, args.refl_scale, good_bands,
+    results = pmap(line->mesma_line(line,args.reflectance_file, args.mode, args.refl_nodata,
+               args.refl_scale, args.normalization, wavelengths, good_bands,
                spectra, classes, un_classes, args.reflectance_uncertainty_file, args.n_mc,
                args.combination_type, args.num_endmembers, args.max_combinations), 1:y_len)
 
@@ -235,6 +238,7 @@ end
     using LinearAlgebra
     using Combinatorics
     using Random
+    include("solvers.jl")
 
     function load_line(reflectance_file::String, reflectance_uncertainty_file::String, line::Int64,
                        good_bands::Array{Bool}, refl_nodata::Float64)
@@ -268,10 +272,37 @@ end
         return x
     end
 
+    function wl_index(wavelengths::Array{Float64}, target)
+        argmin(abs.(wavelengths .- target))
+    end
+
+    function scale_data(refl::Array{Float64}, wavelengths::Array{Float64}, criteria::String)
+
+        if criteria == "none"
+            return refl
+        elseif criteria == "brightness"
+            bad_regions_wl = [[1300,1500],[1800,2000]]
+            good_bands = convert(Array{Bool}, ones(length(wavelengths)))
+            for br in bad_regions_wl
+                good_bands[wl_index(wavelengths, br[1]):wl_index(wavelengths, br[2])] .= false
+            end
+            norm = sqrt.(mean(refl[:,good_bands].^2, dims=2))
+        else
+            try
+                target_wl = parse(Float64,criteria)
+                norm = refl[:,wl_index(wavelengths, target_wl)] ./ 0.5
+            catch e
+                throw(ArgumentError(string("normalization must be [none, brightness, or a specific wavelength].  Provided:", criteria)))
+            end
+        end
+
+        return refl ./ norm
+    end
+
     function mesma_line(line::Int64, reflectance_file::String, mode::String, refl_nodata::Float64,
-                        refl_scale::Float64, good_bands::Array{Bool}, spectra::Array{Float64},
-                        classes::Vector{String}, unique_classes::Vector{String},
-                        reflectance_uncertainty_file::String = "", n_mc::Int64 = 1,
+                        refl_scale::Float64, normalization::String, wavelengths::Array{Float64},
+                        good_bands::Array{Bool}, spectra::Array{Float64}, classes::Vector{String},
+                        unique_classes::Vector{String}, reflectance_uncertainty_file::String = "", n_mc::Int64 = 1,
                         combination_type::String = "all", num_endmembers::Vector{Int64} = [2,3],
                         max_combinations::Int64 = -1)
 
@@ -288,6 +319,7 @@ end
         if isnothing(img_dat)
             return line, nothing, good_data, nothing, nothing
         end
+        scale_data(img_dat, wavelengths[good_bands], normalization)
         img_dat = img_dat ./ refl_scale
 
         if combination_type == "class-even"
@@ -332,37 +364,41 @@ end
                     if num_endmembers[1] != -1
                         if combination_type == "class-even"
 
-
                             perm_class_idx = []
                             for class_subset in class_idx
                                 push!(perm_class_idx, Random.shuffle(class_subset))
                             end
 
                             perm = []
-                            while selector < num_endmembers[1]
+                            selector = 1
+                            while selector <= num_endmembers[1]
+                                _p = mod(selector, length(perm_class_idx)) + 1
+                                push!(perm, perm_class_idx[_p][1])
+                                deleteat!(perm_class_idx[_p],1)
 
-                                _p = mod(selector, length(perm_class_idx))
-                                push!(perm, pop!(perm_class_idx[_p][0]))
-
-                                if length(per_class_idx[_p]) == 0
-                                    pop!(perm_class_idx[_p])
+                                if length(perm_class_idx[_p]) == 0
+                                    deleteat!(perm_class_idx,_p)
                                 end
                                 selector += 1
-
                             end
 
                         else
                             perm = randperm(size(spectra)[1])[1:num_endmembers[1]]
-                            G = spectra[perm,:]'
                         end
+
+                        G = spectra[perm,:]
                     else
-                        perm = 1:size(spectra)[2]
-                        G = spectra'
+                        perm = convert(Vector{Int64},1:size(spectra)[1])
+                        G = spectra
                     end
+
+                    G = scale_data(G, wavelengths[good_bands], normalization)'
 
                     x0 = dolsq(G, d')
                     x0 = x0[:]
-                    res, cost = bvls(G, d[:], x0, zeros(size(x0)), ones(size(x0)), 1e-3, 10, 1)
+                    res, cost = bvls(G, d[:], x0, zeros(size(x0)), ones(size(x0)), 1e-3, 100, 1)
+                    #res, cost = opt_solve(G, d[:], x0, 0, 1 )
+                    #res = x0
                     mc_comp_frac[mc, perm] = res
 
                 elseif occursin("mesma", mode)
@@ -378,11 +414,12 @@ end
                     for (_comb, comb) in enumerate(options[perm])
                         comb = [c for c in comb]
                         #G = hcat(spectra[comb,:], ones(size(spectra[comb,:])[1],1))
-                        G = spectra[comb,:]'
+                        G = scale_data(spectra[comb,:], wavelengths[good_bands], normalization)'
 
                         x0 = dolsq(G, d')
                         if mode == "mesma_bvls"
                             ls, lc = bvls(G, d[:], x0, zeros(size(x0)), ones(size(x0)), 1e-3, 10, 1)
+                            #ls, lc = opt_solve(G, d[:], x0, 0, 1)
                             costs[_comb] = lc
                         else
                             ls = x0
@@ -430,180 +467,6 @@ end
 
     end
 
-    function bvls(A, b, x_lsq, lb, ub, tol, max_iter, verbose)
-        n_iter = 0
-        m, n = size(A)
-
-        x = x_lsq
-        on_bound = zeros(n)
-
-        mask = x .<= lb
-        x[mask] = lb[mask]
-        on_bound[mask] .= -1
-
-        mask = x .>= ub
-        x[mask] = ub[mask]
-        on_bound[mask] .= 1
-
-        free_set = on_bound .== 0
-        active_set = .!free_set
-        free_set = (1:size(free_set)[1])[free_set .!= 0]
-
-        r = A * x - b
-        cost = 0.5 * dot(r , r)
-        initial_cost = cost
-        g = A' * r
-
-        cost_change = nothing
-        step_norm = nothing
-        iteration = 0
-
-        while size(free_set)[1] > 0
-            if verbose == 2
-                optimality = compute_kkt_optimality(g, on_bound)
-            end
-
-            iteration += 1
-            x_free_old = x[free_set]
-
-            A_free = A[:, free_set]
-            b_free = b - A * (x .* active_set)
-            z = dolsq(A_free, b_free)
-
-            lbv = z .< lb[free_set]
-            ubv = z .> ub[free_set]
-
-            v = lbv .| ubv
-
-            if any(lbv)
-                ind = free_set[lbv]
-                x[ind] = lb[ind]
-                active_set[ind] .= true
-                on_bound[ind] .= -1
-            end
-
-            if any(ubv)
-                ind = free_set[ubv]
-                x[ind] = ub[ind]
-                active_set[ind] .= true
-                on_bound[ind] .= 1
-            end
-
-            ind = free_set[.!v]
-            x[ind] = z[.!v]
-
-            r = A * x -b
-            cost_new = 0.5 * dot(r , r)
-            cost_change = cost - cost_new
-            cost = cost_new
-            g = A' * r
-            step_norm = sum((x[free_set] .- x_free_old).^2)
-
-            if any(v)
-                free_set = free_set[.!v]
-            else
-                break
-            end
-        end
-
-        if isnothing(max_iter)
-            max_iter = n
-        end
-        max_iter += iteration
-
-        termination_status = nothing
-
-        optimality = compute_kkt_optimality(g, on_bound)
-        for iteration in iteration:max_iter
-            if optimality < tol
-                termination_status = 1
-            end
-
-            if !isnothing(termination_status)
-                break
-            end
-
-            move_to_free = argmax(g .* on_bound)
-            on_bound[move_to_free] = 0
-
-            x_free = copy(x)
-            x_free_old = copy(x)
-            while true
-
-                free_set = on_bound .== 0
-                sum(free_set)
-                active_set = .!free_set
-                free_set = (1:size(free_set)[1])[free_set .!= 0]
-
-                x_free = x[free_set]
-                x_free_old = copy(x_free)
-                lb_free = lb[free_set]
-                ub_free = ub[free_set]
-
-                A_free = A[:, free_set]
-                b_free = b - A * (x .* active_set)
-                z = dolsq(A_free, b_free)
-
-                lbv = (1:size(free_set)[1])[ z .< lb_free]
-                ubv = (1:size(free_set)[1])[ z .> ub_free]
-                v = cat(lbv, ubv, dims=1)
-
-                if size(v)[1] > 0
-                    alphas = cat(lb_free[lbv] - x_free[lbv], ub_free[ubv] - x_free[ubv],dims=1) ./ (z[v] - x_free[v])
-
-                    i = argmin(alphas)
-                    i_free = v[i]
-                    alpha = alphas[i]
-
-                    x_free .*= (1 .- alpha)
-                    x_free .+= (alpha .* z)
-                    x[free_set] = x_free
-
-                    vsize = size(lbv)
-                    if i <= size(lbv)[1]
-                        on_bound[free_set[i_free]] = -1
-                    else
-                        on_bound[free_set[i_free]] = 1
-                    end
-                else
-                    x_free = z
-                    x[free_set] = x_free
-                    @goto start
-                end
-            end #while
-            @label start
-            step_norm = sum((x_free .- x_free_old).^2)
-
-            r = A * x - b
-            cost_new = 0.5 * dot(r , r)
-            cost_change = cost - cost_new
-
-            combo = tol * cost
-            if cost_change < tol * cost
-                termination_status = 2
-            end
-            cost = cost_new
-
-            g = A' * r
-            optimality = compute_kkt_optimality(g, on_bound)
-        end #iteration
-
-        if isnothing(termination_status)
-            termination_status = 0
-        end
-
-        x[x .< 1e-5] .= 0
-        return x, cost
-    end
-
-    function compute_kkt_optimality(g, on_bound)
-      g_kkt = g .* on_bound
-      free_set = on_bound .== 0
-      g_kkt[free_set] = broadcast(abs, g[free_set])
-
-      return maximum(g_kkt)
-
-    end
 end
 
 main()
