@@ -22,6 +22,27 @@ function nanargmin(input::Array)
     return argmin(x);
 end
 
+function read_envi_wavelengths(filename::String)
+    header_name = splitext(filename)[1] * ".hdr"
+    header = readlines(header_name)
+    found = false
+    for line in header
+        if occursin("wavelength = {", line) || occursin("wavelength= {", line) ||  occursin("wavelength={", line)
+            header = line
+            found = true
+            break
+        end
+    end
+
+    if !found
+        @error "No wavelength found in " * header_name
+        return nothing
+    end
+
+    wavelengths = [parse(Float64, strip(x)) for x in split(split(split(header, "{")[2], "}")[1],",")]
+    return wavelengths
+end
+
 function get_good_bands_mask(wavelengths::Array{Float64}, wavelength_pairs)
     good_bands = ones(Bool, length(wavelengths))
 
@@ -91,8 +112,8 @@ end
 
 function remove_wavelength_region_inplace!(library::SpectralLibrary, set_as_nans::Bool=false)
     if set_as_nans
-        library.spectra[:,!library.good_bands] .= NaN
-        library.wavelengths[!library.good_bands] .= NaN
+        library.spectra[:,.!library.good_bands] .= NaN
+        library.wavelengths[.!library.good_bands] .= NaN
     else
         library.spectra = library.spectra[:, library.good_bands]
         library.wavelengths = library.wavelengths[library.good_bands]
@@ -108,6 +129,9 @@ function interpolate_library_to_new_wavelengths!(library::SpectralLibrary, new_w
         library.spectra[_s,:] = fit(new_wavelengths)
     end
     library.wavelengths = new_wavelengths
+
+    good_bands = get_good_bands_mask(library.wavelengths, library.wavelength_regions_ignore)
+    library.good_bands = good_bands
 end
 
 function scale_library!(library::SpectralLibrary, scaling_factor=nothing)

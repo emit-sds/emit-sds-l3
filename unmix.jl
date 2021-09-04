@@ -11,6 +11,7 @@ using LinearAlgebra
 using Plots
 using Combinatorics
 using Random
+include("src/endmember_library.jl")
 
 
 function main()
@@ -22,6 +23,7 @@ function main()
     add_argument!(parser, "endmember_file", type = String, help = "Endmember reflectance deck")
     add_argument!(parser, "endmember_class", type = String, help = "header of column to use in endmember_file")
     add_argument!(parser, "output_file_base", type = String, help = "Output file base name")
+    add_argument!(parser, "--spectral_starting_column", type = Int64, default = 2, help = "Column of library file that spectral information starts on")
     add_argument!(parser, "--reflectance_uncertainty_file", type = String, default = "", help = "Channelized uncertainty for reflectance input image")
     add_argument!(parser, "--reflectance_uncertainty_covariance_file", type = String, default = "", help = "Input file reference to covariance uncertainty matrix.  If used totgether with the reflectance_uncertainty_file, this should have the instrument noise (diagonals) subtracted off.")
     add_argument!(parser, "--n_mc", type = Int64, default = 1, help = "number of monte carlo runs to use, requires reflectance uncertainty file")
@@ -43,21 +45,14 @@ function main()
     end
     Logging.global_logger(logger)
 
-    pushfirst!(PyVector(pyimport("sys")."path"), "")
+    endmember_library = SpectralLibrary(args.endmember_file, args.endmember_class, args.spectral_starting_column, nothing, 10000.)
+    load_data!(endmember_library)
+    filter_by_class!(endmember_library)
 
-    bel = pyimport("build_endmember_library")
-    endmember_library = bel.SpectralLibrary(args.endmember_file, args.endmember_class,
-                                            string.(Array{Int}(350:2:2499)),Array{Float32}(350:2:2499),
-                                            scale_factor=1.)
-    endmember_library.load_data()
-    endmember_library.filter_by_class()
-    endmember_library.scale_library()
+    refl_file_wl = read_envi_wavelengths(args.reflectance_file)
+    interpolate_library_to_new_wavelengths!(endmember_library, refl_file_wl)
 
-    refl_file_bands = bel.get_refl_wavelengths(args.reflectance_file)
-    endmember_library.interpolate_library_to_new_wavelengths(refl_file_bands)
-
-    endmember_library.remove_wavelength_region_inplace(bel.bad_wv_regions, set_as_nans=true)
-    endmember_library.set_good_bands_from_nan()
+    remove_wavelength_region_inplace!(endmember_library, true)
 
     reflectance_dataset = ArchGDAL.read(args.reflectance_file)
     x_len = ArchGDAL.width(reflectance_dataset)
@@ -72,7 +67,7 @@ function main()
 
 
     if args.mode == "plot_mean_endmembers"
-        for (_u, u) in enumerate(endmember_library.unique_classes)
+        for (_u, u) in enumerate(endmember_library.class_valid_keys)
             mean_spectra = mean(endmember_library.spectra[endmember_library.classes .== u,:],dims=1)[:]
             if _u == 1
                 plot(endmember_library.wavelengths, mean_spectra, label=u)
@@ -88,7 +83,7 @@ function main()
     end
 
     if args.mode == "plot_endmembers"
-        for (_u, u) in enumerate(endmember_library.unique_classes)
+        for (_u, u) in enumerate(endmember_library.class_valid_keys)
             if _u == 1
                 plot(endmember_library.wavelengths, endmember_library.spectra[endmember_library.classes .== u,:]', lab="", xlim=[300,3200], color=palette(:tab10)[_u],dpi=400)
             else
@@ -98,7 +93,7 @@ function main()
         xlabel!("Wavelenth [nm]")
         ylabel!("Reflectance")
         xticks!([500, 1000, 1500, 2000, 2500, 3000])
-        for (_u, u) in enumerate(endmember_library.unique_classes)
+        for (_u, u) in enumerate(endmember_library.class_valid_keys)
             plot!([1:2],[0,0.3], color=palette(:tab10)[_u], labels=u)
         end
         savefig(string(args.output_file_base, "_endmembers.png"))
@@ -109,7 +104,7 @@ function main()
         plots = []
         spectra = endmember_library.spectra
         classes = endmember_library.classes
-        for (_u, u) in enumerate(endmember_library.unique_classes)
+        for (_u, u) in enumerate(endmember_library.class_valid_keys)
             sp = spectra[classes .== u,:]
             sp[broadcast(isnan,sp)] .= 0
             brightness = sum(sp, dims=2)
@@ -158,7 +153,7 @@ function main()
         for _b in 1:(output_bands[_o]-1)
             ArchGDAL.setnodatavalue!(ArchGDAL.getband(outDatasets[_o],_b), -9999)
             if _o == 1
-              oc = endmember_library.unique_classes[_b]
+              oc = endmember_library.class_valid_keys[_b]
               println("Band $_b is of class: $oc")
             end
         end
@@ -166,16 +161,9 @@ function main()
         println("Band $output_bands is of class: Shade")
     end
 
-    good_bands = convert(Array{Bool},endmember_library.good_bands)
-    spectra = convert(Array{Float64},endmember_library.spectra)
-    classes = convert(Vector{String},endmember_library.classes)
-    un_classes = convert(Vector{String},endmember_library.unique_classes)
-    wavelengths = convert(Vector{Float64}, endmember_library.wavelengths)
-
-
     results = pmap(line->mesma_line(line,args.reflectance_file, args.mode, args.refl_nodata,
-               args.refl_scale, args.normalization, wavelengths, good_bands,
-               spectra, classes, un_classes, args.reflectance_uncertainty_file, args.n_mc,
+               args.refl_scale, args.normalization, endmember_library,
+               args.reflectance_uncertainty_file, args.n_mc,
                args.combination_type, args.num_endmembers, args.max_combinations), 1:y_len)
 
 
@@ -213,7 +201,7 @@ function main()
         for res in results
             if isnothing(res[5])
                 output[res[1],res[3], :] = res[5]
-            else
+            end
         end
 
         output = permutedims( output, (2,1,3))
@@ -238,7 +226,8 @@ end
     using LinearAlgebra
     using Combinatorics
     using Random
-    include("solvers.jl")
+    include("src/solvers.jl")
+    include("src/endmember_library.jl")
 
     function load_line(reflectance_file::String, reflectance_uncertainty_file::String, line::Int64,
                        good_bands::Array{Bool}, refl_nodata::Float64)
@@ -300,18 +289,17 @@ end
     end
 
     function mesma_line(line::Int64, reflectance_file::String, mode::String, refl_nodata::Float64,
-                        refl_scale::Float64, normalization::String, wavelengths::Array{Float64},
-                        good_bands::Array{Bool}, spectra::Array{Float64}, classes::Vector{String},
-                        unique_classes::Vector{String}, reflectance_uncertainty_file::String = "", n_mc::Int64 = 1,
+                        refl_scale::Float64, normalization::String, library::SpectralLibrary,
+                        reflectance_uncertainty_file::String = "", n_mc::Int64 = 1,
                         combination_type::String = "all", num_endmembers::Vector{Int64} = [2,3],
                         max_combinations::Int64 = -1)
 
         Random.seed!(13)
         println(line)
-        img_dat, unc_dat, good_data = load_line(reflectance_file, reflectance_uncertainty_file, line, good_bands, refl_nodata)
-        mesma_results = fill(-9999.0, sum(good_data), size(unique_classes)[1] + 1)
+        img_dat, unc_dat, good_data = load_line(reflectance_file, reflectance_uncertainty_file, line, library.good_bands, refl_nodata)
+        mesma_results = fill(-9999.0, sum(good_data), size(library.class_valid_keys)[1] + 1)
         if n_mc > 1
-            mesma_results_std = fill(-9999.0, sum(good_data), size(unique_classes)[1] + 1)
+            mesma_results_std = fill(-9999.0, sum(good_data), size(library.class_valid_keys)[1] + 1)
         else
             mesma_results_std = nothing
         end
@@ -319,13 +307,13 @@ end
         if isnothing(img_dat)
             return line, nothing, good_data, nothing, nothing
         end
-        scale_data(img_dat, wavelengths[good_bands], normalization)
+        scale_data(img_dat, library.wavelengths[library.good_bands], normalization)
         img_dat = img_dat ./ refl_scale
 
         if combination_type == "class-even"
             class_idx = []
-            for uc in unique_classes
-                push!(class_idx, (1:size(classes)[1])[classes .== uc])
+            for uc in library.class_valid_keys
+                push!(class_idx, (1:size(library.classes)[1])[library.classes .== uc])
             end
         end
 
@@ -336,7 +324,7 @@ end
             elseif combination_type == "all"
                 options = []
                 for num in num_endmembers
-                    combo = [c for c in combinations(1:length(classes), num)]
+                    combo = [c for c in combinations(1:length(library.classes), num)]
                     push!(options,combo...)
                 end
             else
@@ -346,11 +334,11 @@ end
 
 
         # Solve complete fraction set (based on full library deck)
-        complete_fractions = zeros(size(img_dat)[1], size(spectra)[1] + 1)
-        complete_fractions_std = zeros(size(img_dat)[1], size(spectra)[1] + 1)
+        complete_fractions = zeros(size(img_dat)[1], size(library.spectra)[1] + 1)
+        complete_fractions_std = zeros(size(img_dat)[1], size(library.spectra)[1] + 1)
         for _i in 1:size(img_dat)[1] # Pixel loop
 
-            mc_comp_frac = zeros(n_mc, size(spectra)[1]+1)
+            mc_comp_frac = zeros(n_mc, size(library.spectra)[1]+1)
             for mc in 1:n_mc #monte carlo loop
                 Random.seed!(mc)
 
@@ -383,16 +371,16 @@ end
                             end
 
                         else
-                            perm = randperm(size(spectra)[1])[1:num_endmembers[1]]
+                            perm = randperm(size(library.spectra)[1])[1:num_endmembers[1]]
                         end
 
-                        G = spectra[perm,:]
+                        G = library.spectra[perm,:]
                     else
-                        perm = convert(Vector{Int64},1:size(spectra)[1])
-                        G = spectra
+                        perm = convert(Vector{Int64},1:size(library.spectra)[1])
+                        G = library.spectra
                     end
 
-                    G = scale_data(G, wavelengths[good_bands], normalization)'
+                    G = scale_data(G, library.wavelengths[library.good_bands], normalization)'
 
                     x0 = dolsq(G, d')
                     x0 = x0[:]
@@ -413,8 +401,8 @@ end
 
                     for (_comb, comb) in enumerate(options[perm])
                         comb = [c for c in comb]
-                        #G = hcat(spectra[comb,:], ones(size(spectra[comb,:])[1],1))
-                        G = scale_data(spectra[comb,:], wavelengths[good_bands], normalization)'
+                        #G = hcat(library.spectra[comb,:], ones(size(library.spectra[comb,:])[1],1))
+                        G = scale_data(library.spectra[comb,:], library.wavelengths[library.good_bands], normalization)'
 
                         x0 = dolsq(G, d')
                         if mode == "mesma_bvls"
@@ -448,15 +436,15 @@ end
             complete_fractions_std[_i,:] = std(mc_comp_frac,dims=1)
 
             # Aggregate results from per-library to per-unique-class
-            for (_class, cl) in enumerate(unique_classes)
-                mesma_results[_i, _class] = sum(complete_fractions[_i,1:end-1][cl .== classes])
+            for (_class, cl) in enumerate(library.class_valid_keys)
+                mesma_results[_i, _class] = sum(complete_fractions[_i,1:end-1][cl .== library.classes])
             end
             mesma_results[_i, end] = complete_fractions[_i,end]
 
             #Aggregate uncertainty if relevant
             if n_mc > 1
-                for (_class, cl) in enumerate(unique_classes)
-                    mesma_results_std[_i, _class] = std(sum(mc_comp_frac[:,1:end-1][:,cl .== classes], dims=2))
+                for (_class, cl) in enumerate(library.class_valid_keys)
+                    mesma_results_std[_i, _class] = std(sum(mc_comp_frac[:,1:end-1][:,cl .== library.classes], dims=2))
                 end
                 mesma_results_std[_i, end] = std(mc_comp_frac[:,end])
             end
