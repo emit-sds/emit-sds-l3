@@ -4,7 +4,6 @@ using EllipsisNotation
 using DelimitedFiles
 using Logging
 using Statistics
-using PyCall
 using Distributed
 using Printf
 using LinearAlgebra
