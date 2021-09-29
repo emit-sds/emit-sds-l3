@@ -9,6 +9,7 @@ using CSV
 using Interpolations
 using Logging
 using Statistics
+using Plots
 
 function nanargmax(input::Array)
     x = copy(input)
@@ -135,15 +136,63 @@ function interpolate_library_to_new_wavelengths!(library::SpectralLibrary, new_w
 end
 
 function scale_library!(library::SpectralLibrary, scaling_factor=nothing)
-  if isnothing(scaling_factor)
-      library.spectra =  library.spectra ./ library.scale_factor
-  else
-      library.spectra /= scaling_factor
-  end
+    if isnothing(scaling_factor)
+        library.spectra =  library.spectra ./ library.scale_factor
+    else
+        library.spectra /= scaling_factor
+    end
 end
 
 function brightness_normalize!(library::SpectralLibrary)
     library.spectra = library.spectra ./ sqrt.(mean(library.spectra[:,library.good_bands].^2, dims=2))
 end
 
+function plot_mean_endmembers(endmember_library::SpectralLibrary, output_name::String)
+    for (_u, u) in enumerate(endmember_library.class_valid_keys)
+        mean_spectra = mean(endmember_library.spectra[endmember_library.classes .== u,:],dims=1)[:]
+        if _u == 1
+            plot(endmember_library.wavelengths, mean_spectra, label=u)
+        else
+            plot!(endmember_library.wavelengths, mean_spectra, label=u, xlim=[300,3200])
+        end
+    end
+    xlabel!("Wavelength [nm]")
+    ylabel!("Reflectance")
+    xticks!([500, 1000, 1500, 2000, 2500, 3000])
+    savefig(output_name)
+end
 
+function plot_endmembers(endmember_library::SpectralLibrary, output_name::String)
+
+    for (_u, u) in enumerate(endmember_library.class_valid_keys)
+        if _u == 1
+            plot(endmember_library.wavelengths, endmember_library.spectra[endmember_library.classes .== u,:]', lab="", xlim=[300,3200], color=palette(:tab10)[_u],dpi=400)
+        else
+            plot!(endmember_library.wavelengths, endmember_library.spectra[endmember_library.classes .== u,:]', lab="",xlim=[300,3200], color=palette(:tab10)[_u])
+        end
+    end
+    xlabel!("Wavelenth [nm]")
+    ylabel!("Reflectance")
+    xticks!([500, 1000, 1500, 2000, 2500, 3000])
+    for (_u, u) in enumerate(endmember_library.class_valid_keys)
+        plot!([1:2],[0,0.3], color=palette(:tab10)[_u], labels=u)
+    end
+    savefig(output_name)
+end
+
+function plot_endmembers_individually(endmember_library::SpectralLibrary, output_name::String)
+    plots = []
+    spectra = endmember_library.spectra
+    classes = endmember_library.classes
+    for (_u, u) in enumerate(endmember_library.class_valid_keys)
+        sp = spectra[classes .== u,:]
+        sp[broadcast(isnan,sp)] .= 0
+        brightness = sum(sp, dims=2)
+        toplot = spectra[classes .== u,:] ./ brightness
+        #push!(plots, plot(endmember_library.wavelengths, toplot', title=u, color=palette(:tab10)[_u], xlabel="Wavelength [nm]", ylabel="Reflectance"))
+        push!(plots, plot(endmember_library.wavelengths, toplot', title=u, xlabel="Wavelength [nm]", ylabel="Reflectance"))
+        xticks!([500, 1000, 1500, 2000, 2500])
+    end
+    plot(plots...,size=(1000,600),dpi=400)
+    savefig(output_name)
+end
