@@ -1,4 +1,5 @@
 using ArchGDAL
+using GDAL
 using ArgParse2
 using EllipsisNotation
 using DelimitedFiles
@@ -7,10 +8,10 @@ using Statistics
 using Distributed
 using Printf
 using LinearAlgebra
-using Plots
 using Combinatorics
 using Random
 include("src/endmember_library.jl")
+include("src/datasets.jl")
 
 
 function main()
@@ -24,9 +25,8 @@ function main()
     add_argument!(parser, "output_file_base", type = String, help = "Output file base name")
     add_argument!(parser, "--spectral_starting_column", type = Int64, default = 2, help = "Column of library file that spectral information starts on")
     add_argument!(parser, "--reflectance_uncertainty_file", type = String, default = "", help = "Channelized uncertainty for reflectance input image")
-    add_argument!(parser, "--reflectance_uncertainty_covariance_file", type = String, default = "", help = "Input file reference to covariance uncertainty matrix.  If used totgether with the reflectance_uncertainty_file, this should have the instrument noise (diagonals) subtracted off.")
     add_argument!(parser, "--n_mc", type = Int64, default = 1, help = "number of monte carlo runs to use, requires reflectance uncertainty file")
-    add_argument!(parser, "--mode", type = String, default = "sma", help = "operating mode.  Options = [sma, mesma, plot_endmembers]")
+    add_argument!(parser, "--mode", type = String, default = "sma", help = "operating mode.  Options = [sma, mesma, plots]")
     add_argument!(parser, "--refl_nodata", type = Float64, default = -9999.0, help = "nodata value expected in input reflectance data")
     add_argument!(parser, "--refl_scale", type = Float64, default = 1.0, help = "scale image data (divide it by) this amount")
     add_argument!(parser, "--normalization", type = String, default = "none", help = "flag to indicate the scaling type. Options = [none, brightness, specific wavelength]")
@@ -44,7 +44,7 @@ function main()
     end
     Logging.global_logger(logger)
 
-    endmember_library = SpectralLibrary(args.endmember_file, args.endmember_class, args.spectral_starting_column, nothing, 10000.)
+    endmember_library = SpectralLibrary(args.endmember_file, args.endmember_class, args.spectral_starting_column, nothing, 1.)
     load_data!(endmember_library)
     filter_by_class!(endmember_library)
 
@@ -65,57 +65,13 @@ function main()
     end
 
 
-    if args.mode == "plot_mean_endmembers"
-        for (_u, u) in enumerate(endmember_library.class_valid_keys)
-            mean_spectra = mean(endmember_library.spectra[endmember_library.classes .== u,:],dims=1)[:]
-            if _u == 1
-                plot(endmember_library.wavelengths, mean_spectra, label=u)
-            else
-                plot!(endmember_library.wavelengths, mean_spectra, label=u, xlim=[300,3200])
-            end
-        end
-        xlabel!("Wavelength [nm]")
-        ylabel!("Reflectance")
-        xticks!([500, 1000, 1500, 2000, 2500, 3000])
-        savefig("test.png")
+    if args.mode == "plots"
+        plot_mean_endmembers(endmember_library, string(args.output_file_base, "_mean_endmembers.png"))
+        plot_endmembers(endmember_library, string(args.output_file_base, "_endmembers.png"))
+        plot_endmembers_individually(string(args.output_file_base, "_endmembers_individually.png"))
         exit()
     end
 
-    if args.mode == "plot_endmembers"
-        for (_u, u) in enumerate(endmember_library.class_valid_keys)
-            if _u == 1
-                plot(endmember_library.wavelengths, endmember_library.spectra[endmember_library.classes .== u,:]', lab="", xlim=[300,3200], color=palette(:tab10)[_u],dpi=400)
-            else
-                plot!(endmember_library.wavelengths, endmember_library.spectra[endmember_library.classes .== u,:]', lab="",xlim=[300,3200], color=palette(:tab10)[_u])
-            end
-        end
-        xlabel!("Wavelenth [nm]")
-        ylabel!("Reflectance")
-        xticks!([500, 1000, 1500, 2000, 2500, 3000])
-        for (_u, u) in enumerate(endmember_library.class_valid_keys)
-            plot!([1:2],[0,0.3], color=palette(:tab10)[_u], labels=u)
-        end
-        savefig(string(args.output_file_base, "_endmembers.png"))
-        exit()
-    end
-
-    if args.mode == "plot_endmembers_individually"
-        plots = []
-        spectra = endmember_library.spectra
-        classes = endmember_library.classes
-        for (_u, u) in enumerate(endmember_library.class_valid_keys)
-            sp = spectra[classes .== u,:]
-            sp[broadcast(isnan,sp)] .= 0
-            brightness = sum(sp, dims=2)
-            toplot = spectra[classes .== u,:] ./ brightness
-            #push!(plots, plot(endmember_library.wavelengths, toplot', title=u, color=palette(:tab10)[_u], xlabel="Wavelength [nm]", ylabel="Reflectance"))
-            push!(plots, plot(endmember_library.wavelengths, toplot', title=u, xlabel="Wavelength [nm]", ylabel="Reflectance"))
-            xticks!([500, 1000, 1500, 2000, 2500])
-        end
-        plot(plots...,size=(1000,600),dpi=400)
-        savefig(string(args.output_file_base, "_endmembers_individually.png"))
-        exit()
-    end
 
     endmember_library.spectra = endmember_library.spectra[:,endmember_library.good_bands]
 
@@ -133,32 +89,12 @@ function main()
         push!(output_files,string(args.output_file_base , "_complete_fractions") )
     end
 
-    outDatasets = []
-    for _o in 1:length(output_bands)
-        @info "Output Image Size (x,y,b): $x_len, $y_len, $output_bands.  Creating output fractional cover dataset."
-        outDataset = ArchGDAL.create(output_files[_o], driver=ArchGDAL.getdriver("ENVI"), width=x_len,
-                                     height=y_len, nbands=output_bands[_o], dtype=Float64)
-        ArchGDAL.setproj!(outDataset, ArchGDAL.getproj(reflectance_dataset))
-        try
-            ArchGDAL.setgeotransform!(outDataset, ArchGDAL.getgeotransform(reflectance_dataset))
-        catch e
-            println("No geotransorm avaialble, proceeding without")
-        end
-        push!(outDatasets, outDataset)
-    end
 
+    output_band_names = copy(endmember_library.class_valid_keys)
+    push!(output_band_names, "Brightness")
 
-    for _o in 1:(length(outDatasets))
-        for _b in 1:(output_bands[_o]-1)
-            ArchGDAL.setnodatavalue!(ArchGDAL.getband(outDatasets[_o],_b), -9999)
-            if _o == 1
-              oc = endmember_library.class_valid_keys[_b]
-              println("Band $_b is of class: $oc")
-            end
-        end
-        ArchGDAL.setnodatavalue!(ArchGDAL.getband(outDatasets[_o],output_bands[_o]), -9999)
-        println("Band $output_bands is of class: Shade")
-    end
+    initiate_output_datasets(output_files, x_len, y_len, output_bands, reflectance_dataset)
+    set_band_names(output_files[1], output_band_names)
 
     results = pmap(line->mesma_line(line,args.reflectance_file, args.mode, args.refl_nodata,
                args.refl_scale, args.normalization, endmember_library,
@@ -166,51 +102,11 @@ function main()
                args.combination_type, args.num_endmembers, args.max_combinations), 1:y_len)
 
 
-    # Write primary output
-    output = zeros(y_len, x_len, output_bands[1]) .- 9999
-    for res in results
-        if isnothing(res[2]) == false
-            output[res[1],res[3], :] = res[2]
-        end
-    end
-    output = permutedims( output, (2,1,3))
-    ArchGDAL.write!(outDatasets[1], output, [1:size(output)[end];], 0, 0, size(output)[1], size(output)[2])
-    outDatasets[1] = nothing
-
-    ods_idx = 2
-
-    # Write uncertainty output
-    if args.n_mc > 1
-        output = zeros(y_len, x_len, output_bands[ods_idx]) .- 9999
-        for res in results
-            if isnothing(res[4]) == false
-                output[res[1],res[3], :] = res[4]
-            end
-        end
-
-        output = permutedims( output, (2,1,3))
-        ArchGDAL.write!(outDatasets[2], output, [1:size(output)[end];], 0, 0, size(output)[1], size(output)[2])
-        outDatasets[ods_idx]= nothing
-        ods_idx += 1
-    end
-
-    # Write complete fraction output
-    if args.write_complete_fractions == 1
-        output = zeros(y_len, x_len, output_bands[ods_idx]) .- 9999
-        for res in results
-            if isnothing(res[5])
-                output[res[1],res[3], :] = res[5]
-            end
-        end
-
-        output = permutedims( output, (2,1,3))
-        ArchGDAL.write!(outDatasets[ods_idx], output, [1:size(output)[end];], 0, 0, size(output)[1], size(output)[2])
-        outDatasets[ods_idx] = nothing
-        ods_idx += 1
-
-    end
+    write_results(output_files, output_bands, x_len, y_len, results, args)
 
 end
+
+
 
 
 @everywhere begin
@@ -227,30 +123,8 @@ end
     using Random
     include("src/solvers.jl")
     include("src/endmember_library.jl")
+    include("src/datasets.jl")
 
-    function load_line(reflectance_file::String, reflectance_uncertainty_file::String, line::Int64,
-                       good_bands::Array{Bool}, refl_nodata::Float64)
-
-        reflectance_dataset = ArchGDAL.read(reflectance_file)
-        img_dat = convert(Array{Float64},ArchGDAL.readraster(reflectance_file)[:,line,:])
-        img_dat = img_dat[:, good_bands]
-        good_data = .!all(img_dat .== refl_nodata, dims=2)[:,1]
-        img_dat = img_dat[good_data,:]
-
-        if sum(good_data) > 1
-            if reflectance_uncertainty_file != ""
-                unc_dat = convert(Array{Float64},ArchGDAL.readraster(reflectance_uncertainty_file)[:,line,:])
-                unc_dat = unc_dat[:, good_bands]
-                unc_dat = unc_dat[good_data,:]
-            else
-                unc_dat = nothing
-            end
-        else
-            return nothing, nothing, good_data
-        end
-
-        return img_dat, unc_dat, good_data
-    end
 
     function dolsq(A, b)
         x = A \ b
