@@ -17,8 +17,6 @@ import numpy as np
 import pandas as pd
 import os
 import logging
-from mesma.square_array import SquareArray
-from mesma.ear_masa_cob import EarMasaCob
 
 bad_wv_regions = [[0,440],[1310,1490],[1770,2050],[2440,2880]]
 
@@ -111,6 +109,9 @@ class SpectralLibrary():
 
 
 def main():
+    from mesma.square_array import SquareArray
+    from mesma.ear_masa_cob import EarMasaCob
+
     parser = argparse.ArgumentParser(description='Execute MESMA in parallel over a BIL line')
     parser.add_argument('-spectral_data_files',type=str,default=['data/urbanspectraandmeta.csv'],nargs='+')
     parser.add_argument('-class_names',type=str,default=['Level_2'],nargs='+')
