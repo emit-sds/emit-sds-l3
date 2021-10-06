@@ -125,15 +125,6 @@ end
     include("src/endmember_library.jl")
     include("src/datasets.jl")
 
-
-    function dolsq(A, b)
-        x = A \ b
-        #x = pinv(A)*b
-        #Q,R = qr(A)
-        #x = inv(R)*(Q'*b)
-        return x
-    end
-
     function wl_index(wavelengths::Array{Float64}, target)
         argmin(abs.(wavelengths .- target))
     end

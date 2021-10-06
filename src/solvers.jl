@@ -24,6 +24,14 @@ function opt_solve(A, b, x0, lb, ub)
 end
 
 
+function dolsq(A, b)
+    x = A \ b
+    #x = pinv(A)*b
+    #Q,R = qr(A)
+    #x = inv(R)*(Q'*b)
+    return x
+end
+
 
 function bvls(A, b, x_lsq, lb, ub, tol, max_iter, verbose)
     n_iter = 0
