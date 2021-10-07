@@ -44,7 +44,7 @@ function main()
     end
     Logging.global_logger(logger)
 
-    endmember_library = SpectralLibrary(args.endmember_file, args.endmember_class, args.spectral_starting_column, nothing, 1.)
+    endmember_library = SpectralLibrary(args.endmember_file, args.endmember_class, args.spectral_starting_column, nothing, 1., [])
     load_data!(endmember_library)
     filter_by_class!(endmember_library)
 
