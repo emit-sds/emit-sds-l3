@@ -40,7 +40,7 @@ function main()
     if isnothing(args.log_file)
         logger = Logging.SimpleLogger()
     else
-        logger = Logging.SimpleLogger(args.log_file)
+        logger = Logging.SimpleLogger(open(args.log_file, "w+"))
     end
     Logging.global_logger(logger)
 
