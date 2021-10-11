@@ -81,7 +81,7 @@ function main()
 
     if args.n_mc > 1
         push!(output_bands, n_classes + 1)
-        push!(output_files,string(args.output_file_base , "_fractional_cover_uncertainty") )
+        push!(output_files, string(args.output_file_base , "_fractional_cover_uncertainty"))
     end
 
     if args.write_complete_fractions == 1
@@ -95,6 +95,9 @@ function main()
 
     initiate_output_datasets(output_files, x_len, y_len, output_bands, reflectance_dataset)
     set_band_names(output_files[1], output_band_names)
+    if args.n_mc > 1
+        set_band_names(output_files[2], output_band_names)
+    end
 
     results = pmap(line->mesma_line(line,args.reflectance_file, args.mode, args.refl_nodata,
                args.refl_scale, args.normalization, endmember_library,
