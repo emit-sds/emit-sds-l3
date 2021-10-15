@@ -34,6 +34,8 @@ function main()
     add_argument!(parser, "--max_combinations", type = Int64, default = -1, help = "set the maximum number of enmember combinations (relevant only to mesma)")
     add_argument!(parser, "--num_endmembers", type = Int64, default = [3], nargs="+", help = "set the maximum number of enmember to use")
     add_argument!(parser, "--write_complete_fractions", type=Bool, default = 0, help = "flag to indicate if per-endmember fractions should be written out")
+    add_argument!(parser, "--start_line", type=Int64, default = 1, help = "line of image to start on")
+    add_argument!(parser, "--end_line", type=Int64, default = -1, help = "line of image to stop on (-1 does the full image)")
     add_argument!(parser, "--log_file", type = String, default = nothing, help = "log file to write to")
     args = parse_args(parser)
 
@@ -56,6 +58,17 @@ function main()
     reflectance_dataset = ArchGDAL.read(args.reflectance_file)
     x_len = ArchGDAL.width(reflectance_dataset)
     y_len = ArchGDAL.height(reflectance_dataset)
+
+    if args.start_line > y_len || args.start_line < 1;
+       throw(ArgumentError(string("start_line must be less than length of scene, and greater than 1.  Provided: ", args.start_line, ", Scene length: ", y_len)))
+    end
+
+    if args.end_line == -1; args.end_line = y_len; end
+
+    if args.end_line > y_len || args.end_line < args.start_line;
+       throw(ArgumentError(string("end_line must be less than length of scene, and greater than start_line.  Provided: ", args.end_line_line, ", start_line: ", args.start_line)))
+    end
+    @info string("Running from lines: ", args.start_line, " - ", args.end_line)
 
     if args.reflectance_uncertainty_file != ""
         reflectance_uncertainty_dataset = ArchGDAL.read(args.reflectance_uncertainty_file)
@@ -89,7 +102,6 @@ function main()
         push!(output_files,string(args.output_file_base , "_complete_fractions") )
     end
 
-
     output_band_names = copy(endmember_library.class_valid_keys)
     push!(output_band_names, "Brightness")
 
@@ -102,7 +114,7 @@ function main()
     results = pmap(line->mesma_line(line,args.reflectance_file, args.mode, args.refl_nodata,
                args.refl_scale, args.normalization, endmember_library,
                args.reflectance_uncertainty_file, args.n_mc,
-               args.combination_type, args.num_endmembers, args.max_combinations), 1:y_len)
+               args.combination_type, args.num_endmembers, args.max_combinations), args.start_line:args.stop_line)
 
 
     write_results(output_files, output_bands, x_len, y_len, results, args)
