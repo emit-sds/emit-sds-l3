@@ -34,6 +34,7 @@ function main()
     add_argument!(parser, "--max_combinations", type = Int64, default = -1, help = "set the maximum number of enmember combinations (relevant only to mesma)")
     add_argument!(parser, "--num_endmembers", type = Int64, default = [3], nargs="+", help = "set the maximum number of enmember to use")
     add_argument!(parser, "--write_complete_fractions", type=Bool, default = 0, help = "flag to indicate if per-endmember fractions should be written out")
+    add_argument!(parser, "--optimizer", type=String, default = "bvls", help = "Choice of core optimization.  Options = [inverse, bvls, ldsqp]")
     add_argument!(parser, "--start_line", type=Int64, default = 1, help = "line of image to start on")
     add_argument!(parser, "--end_line", type=Int64, default = -1, help = "line of image to stop on (-1 does the full image)")
     add_argument!(parser, "--log_file", type = String, default = nothing, help = "log file to write to")
@@ -114,7 +115,8 @@ function main()
     results = pmap(line->mesma_line(line,args.reflectance_file, args.mode, args.refl_nodata,
                args.refl_scale, args.normalization, endmember_library,
                args.reflectance_uncertainty_file, args.n_mc,
-               args.combination_type, args.num_endmembers, args.max_combinations), args.start_line:args.stop_line)
+               args.combination_type, args.num_endmembers, args.max_combinations), args.start_line:args.stop_line,
+               args.optimizer)
 
 
     write_results(output_files, output_bands, x_len, y_len, results, args)
@@ -171,7 +173,7 @@ end
                         refl_scale::Float64, normalization::String, library::SpectralLibrary,
                         reflectance_uncertainty_file::String = "", n_mc::Int64 = 1,
                         combination_type::String = "all", num_endmembers::Vector{Int64} = [2,3],
-                        max_combinations::Int64 = -1)
+                        max_combinations::Int64 = -1, optimization="bvls")
 
         Random.seed!(13)
         println(line)
@@ -263,9 +265,14 @@ end
 
                     x0 = dolsq(G, d')
                     x0 = x0[:]
-                    res, cost = bvls(G, d[:], x0, zeros(size(x0)), ones(size(x0)), 1e-3, 100, 1)
-                    #res, cost = opt_solve(G, d[:], x0, 0, 1 )
-                    #res = x0
+                    res = nothing
+                    if optimization == "bvls"
+                        res, cost = bvls(G, d[:], x0, zeros(size(x0)), ones(size(x0)), 1e-3, 100, 1)
+                    elseif optimization == "ldsqp"
+                        res, cost = opt_solve(G, d[:], x0, 0, 1 )
+                    elseif optimization == "inverse"
+                        res = x0
+                    end
                     mc_comp_frac[mc, perm] = res
 
                 elseif occursin("mesma", mode)
@@ -284,16 +291,18 @@ end
                         G = scale_data(library.spectra[comb,:], library.wavelengths[library.good_bands], normalization)'
 
                         x0 = dolsq(G, d')
-                        if mode == "mesma_bvls"
+                        ls = nothing
+                        if optimization == "bvls"
                             ls, lc = bvls(G, d[:], x0, zeros(size(x0)), ones(size(x0)), 1e-3, 10, 1)
-                            #ls, lc = opt_solve(G, d[:], x0, 0, 1)
                             costs[_comb] = lc
-                        else
+                        elseif optimization = "ldsqp"
+                            ls, lc = opt_solve(G, d[:], x0, 0, 1)
+                            costs[_comb] = lc
+                        elseif optimization == "inverse"
                             ls = x0
                             r = G * x0 - d[:]
                             costs[_comb] = dot(r,r)
                         end
-
                         push!(solutions,ls)
 
                     end
