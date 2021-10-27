@@ -115,8 +115,8 @@ function main()
     results = pmap(line->mesma_line(line,args.reflectance_file, args.mode, args.refl_nodata,
                args.refl_scale, args.normalization, endmember_library,
                args.reflectance_uncertainty_file, args.n_mc,
-               args.combination_type, args.num_endmembers, args.max_combinations), args.start_line:args.stop_line,
-               args.optimizer)
+               args.combination_type, args.num_endmembers, args.max_combinations, args.optimizer),
+               args.start_line:args.stop_line)
 
 
     write_results(output_files, output_bands, x_len, y_len, results, args)
