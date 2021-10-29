@@ -140,16 +140,30 @@ end
                 good_bands[wl_index(wavelengths, br[1]):wl_index(wavelengths, br[2])] .= false
             end
             norm = sqrt.(mean(refl[:,good_bands].^2, dims=2))
+            return refl ./ norm
+        elseif criteria == "brightness-vtir"
+            split = 2.6
+            good_bands = convert(Array{Bool}, zeros(length(wavelengths)))
+            good_bands[wavelengths .<= split] .= true
+            norm = sqrt.(mean(refl[:,good_bands].^2, dims=2))
+            refl = refl[:, good_bands] ./ norm
+
+            good_bands = convert(Array{Bool}, zeros(length(wavelengths)))
+            good_bands[wavelengths .> split] .= true
+            norm = sqrt.(mean(refl[:,good_bands].^2, dims=2))
+            refl = refl[:, good_bands] ./ norm
+
+            return refl
         else
             try
                 target_wl = parse(Float64,criteria)
-                norm = refl[:,wl_index(wavelengths, target_wl)] ./ 0.5
+                norm = 0.5
+                return refl ./ norm
             catch e
                 throw(ArgumentError(string("normalization must be [none, brightness, or a specific wavelength].  Provided:", criteria)))
             end
         end
 
-        return refl ./ norm
     end
 
     function mesma_line(line::Int64, reflectance_file::String, mode::String, refl_nodata::Float64,
