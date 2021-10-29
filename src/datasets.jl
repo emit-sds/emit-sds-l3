@@ -98,7 +98,7 @@ function load_line(reflectance_file::String, reflectance_uncertainty_file::Strin
         reflectance_dataset = ArchGDAL.read(reflectance_file)
         img_dat = convert(Array{Float64},ArchGDAL.readraster(reflectance_file)[:,line,:])
         img_dat = img_dat[:, good_bands]
-        good_data = .!all(img_dat .== refl_nodata, dims=2)[:,1]
+        good_data = .!any(img_dat .== refl_nodata, dims=2)[:,1]
         img_dat = img_dat[good_data,:]
 
         if sum(good_data) > 1
