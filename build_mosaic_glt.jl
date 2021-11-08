@@ -9,8 +9,6 @@ using Statistics
 
 function main()
 
-    s = ArgParseSettings()
-
     parser = ArgumentParser(prog = "GLT Builder",
                         description = "Build GLTs from one or more files")
 
