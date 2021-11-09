@@ -30,6 +30,11 @@ function main()
     end
     Logging.global_logger(logger)
 
+    if args.target_resolution[2] > 0
+        args.target_resolution[2] *= -1
+        logging.info("Converting second resolution argument to be negative, currently necessary for parsing")
+    end
+
     #if ! (args.criteria_mode ! in ["min","max","distance"])
     #    error("Invalid criteria_mode, expected on of min, max, distance")
     #end
