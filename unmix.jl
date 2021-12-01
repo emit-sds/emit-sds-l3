@@ -146,12 +146,12 @@ end
             good_bands = convert(Array{Bool}, zeros(length(wavelengths)))
             good_bands[wavelengths .<= split] .= true
             norm = sqrt.(mean(refl[:,good_bands].^2, dims=2))
-            refl = refl[:, good_bands] ./ norm
+            refl[:,good_bands] = refl[:, good_bands] ./ norm
 
             good_bands = convert(Array{Bool}, zeros(length(wavelengths)))
             good_bands[wavelengths .> split] .= true
             norm = sqrt.(mean(refl[:,good_bands].^2, dims=2))
-            refl = refl[:, good_bands] ./ norm
+            refl[:,good_bands]= refl[:, good_bands] ./ norm
 
             return refl
         else
