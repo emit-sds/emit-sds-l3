@@ -217,6 +217,7 @@ end
         for _i in 1:size(img_dat)[1] # Pixel loop
 
             mc_comp_frac = zeros(n_mc, size(library.spectra)[1]+1)
+            mc_costs = zeros(n_mc) + 1e12
             for mc in 1:n_mc #monte carlo loop
                 Random.seed!(mc)
 
@@ -226,7 +227,7 @@ end
                 end
 
 
-                if mode == "sma"
+                if mode == "sma" || mode == "sma-best"
                     if num_endmembers[1] != -1
                         if combination_type == "class-even"
 
@@ -266,6 +267,7 @@ end
                     #res, cost = opt_solve(G, d[:], x0, 0, 1 )
                     #res = x0
                     mc_comp_frac[mc, perm] = res
+                    mc_costs[mc] = cost
 
                 elseif occursin("mesma", mode)
                     solutions = []
@@ -299,6 +301,7 @@ end
                     best = argmin(costs)
 
                     mc_comp_frac[mc, [ind for ind in options[perm][best]]] = solutions[best]
+                    mc_costs[mc] = costs[best]
                 else
                     error("Invalid mode provided")
                 end
@@ -310,6 +313,11 @@ end
             mc_comp_frac[:,1:end-1] = mc_comp_frac[:,1:end-1] ./ mc_comp_frac[:,end]
 
             #
+            if mode == "sma-best"
+                complete_fractions[_i,:] = mc_comp_frac[argmin(mc_costs),:]
+            else
+                complete_fractions[_i,:] = mean(mc_comp_frac,dims=1)
+            end
             complete_fractions[_i,:] = mean(mc_comp_frac,dims=1)
             complete_fractions_std[_i,:] = std(mc_comp_frac,dims=1)
 
