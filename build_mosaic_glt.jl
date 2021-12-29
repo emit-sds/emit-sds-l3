@@ -32,7 +32,7 @@ function main()
 
     if args.target_resolution[2] > 0
         args.target_resolution[2] *= -1
-        logging.info("Converting second resolution argument to be negative, currently necessary for parsing")
+        @info string("Converting second resolution argument to be negative, currently necessary for parsing.  Revised to: ", args.target_resolution)
     end
 
     #if ! (args.criteria_mode ! in ["min","max","distance"])
@@ -83,7 +83,7 @@ function main()
         output_bands = 2
     end
     outDataset = ArchGDAL.create(args.output_filename, driver=ArchGDAL.getdriver("ENVI"), width=x_size_px,
-    height=y_size_px, nbands=3, dtype=Float32)
+    height=y_size_px, nbands=output_bands, dtype=Float32)
     ArchGDAL.setproj!(outDataset, ArchGDAL.toWKT(ArchGDAL.importEPSG(4326)))
     ArchGDAL.setgeotransform!(outDataset, [min_x, args.target_resolution[1], 0, max_y, 0, args.target_resolution[2]])
 
