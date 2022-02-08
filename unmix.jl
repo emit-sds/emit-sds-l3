@@ -132,7 +132,6 @@ end
     using DelimitedFiles
     using Logging
     using Statistics
-    using PyCall
     using Distributed
     using Printf
     using LinearAlgebra
@@ -295,9 +294,9 @@ end
                         if optimization == "bvls"
                             ls, lc = bvls(G, d[:], x0, zeros(size(x0)), ones(size(x0)), 1e-3, 10, 1)
                             costs[_comb] = lc
-                        elseif optimization = "ldsqp"
+                        elseif optimization == "ldsqp"
                             ls, lc = opt_solve(G, d[:], x0, 0, 1)
-                            costs[_comb] = lc
+                            costs[_comb] == lc
                         elseif optimization == "inverse"
                             ls = x0
                             r = G * x0 - d[:]
