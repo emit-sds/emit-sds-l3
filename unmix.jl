@@ -24,6 +24,7 @@ function main()
     add_argument!(parser, "endmember_class", type = String, help = "header of column to use in endmember_file")
     add_argument!(parser, "output_file_base", type = String, help = "Output file base name")
     add_argument!(parser, "--spectral_starting_column", type = Int64, default = 2, help = "Column of library file that spectral information starts on")
+    add_argument!(parser, "--truncate_end_columns", type = Int64, default = 0, help = "Columns to remove from spectral library at end of file")
     add_argument!(parser, "--reflectance_uncertainty_file", type = String, default = "", help = "Channelized uncertainty for reflectance input image")
     add_argument!(parser, "--n_mc", type = Int64, default = 1, help = "number of monte carlo runs to use, requires reflectance uncertainty file")
     add_argument!(parser, "--mode", type = String, default = "sma", help = "operating mode.  Options = [sma, mesma, plots]")
@@ -47,7 +48,7 @@ function main()
     end
     Logging.global_logger(logger)
 
-    endmember_library = SpectralLibrary(args.endmember_file, args.endmember_class, args.spectral_starting_column, nothing, 1.)
+    endmember_library = SpectralLibrary(args.endmember_file, args.endmember_class, args.spectral_starting_column, args.truncate_end_columns)
     load_data!(endmember_library)
     filter_by_class!(endmember_library)
 
@@ -57,19 +58,23 @@ function main()
     remove_wavelength_region_inplace!(endmember_library, true)
 
     reflectance_dataset = ArchGDAL.read(args.reflectance_file)
-    x_len = ArchGDAL.width(reflectance_dataset)
-    y_len = ArchGDAL.height(reflectance_dataset)
+    x_len = Int64(ArchGDAL.width(reflectance_dataset))
+    y_len = Int64(ArchGDAL.height(reflectance_dataset))
 
     if args.start_line > y_len || args.start_line < 1;
        throw(ArgumentError(string("start_line must be less than length of scene, and greater than 1.  Provided: ", args.start_line, ", Scene length: ", y_len)))
     end
 
-    if args.end_line == -1; args.end_line = y_len; end
-
-    if args.end_line > y_len || args.end_line < args.start_line;
-       throw(ArgumentError(string("end_line must be less than length of scene, and greater than start_line.  Provided: ", args.end_line_line, ", start_line: ", args.start_line)))
+    if args.end_line == -1; 
+        end_line = y_len; 
+    else
+        end_line = args.end_line
     end
-    @info string("Running from lines: ", args.start_line, " - ", args.end_line)
+
+    if end_line > y_len || end_line < args.start_line;
+       throw(ArgumentError(string("end_line must be less than length of scene (or -1 for full scene), and greater than start_line.  Provided: ", args.end_line, ", start_line: ", args.start_line)))
+    end
+    @info string("Running from lines: ", args.start_line, " - ", end_line)
 
     if args.reflectance_uncertainty_file != ""
         reflectance_uncertainty_dataset = ArchGDAL.read(args.reflectance_uncertainty_file)
@@ -82,7 +87,7 @@ function main()
     if args.mode == "plots"
         plot_mean_endmembers(endmember_library, string(args.output_file_base, "_mean_endmembers.png"))
         plot_endmembers(endmember_library, string(args.output_file_base, "_endmembers.png"))
-        plot_endmembers_individually(string(args.output_file_base, "_endmembers_individually.png"))
+        plot_endmembers_individually(endmember_library, string(args.output_file_base, "_endmembers_individually.png"))
         exit()
     end
 
@@ -115,9 +120,8 @@ function main()
     results = pmap(line->mesma_line(line,args.reflectance_file, args.mode, args.refl_nodata,
                args.refl_scale, args.normalization, endmember_library,
                args.reflectance_uncertainty_file, args.n_mc,
-               args.combination_type, args.num_endmembers, args.max_combinations), args.start_line:args.stop_line,
-               args.optimizer)
-
+               args.combination_type, args.num_endmembers, args.max_combinations, args.optimizer), 
+                    args.start_line:end_line)
 
     write_results(output_files, output_bands, x_len, y_len, results, args)
 
