@@ -3,7 +3,6 @@ using ArgParse2
 using EllipsisNotation
 using DelimitedFiles
 using Logging
-using Debugger
 using Statistics
 
 
@@ -20,6 +19,7 @@ function main()
     add_argument!(parser, "--criteria_file_list", type = String, help = "file(s) to be used for criteria")
     add_argument!(parser, "--target_extent_ul_lr", type = Float64, nargs=4, help = "extent to build the mosaic of")
     add_argument!(parser, "--mosaic", type = Int32, default=1, help = "treat as a mosaic")
+    add_argument!(parser, "--output_epsg", type = Int32, default=4326, help = "epsg to write to destination")
     add_argument!(parser, "--log_file", type = String, default = nothing, help = "log file to write to")
     args = parse_args(parser)
 
@@ -84,7 +84,7 @@ function main()
     end
     outDataset = ArchGDAL.create(args.output_filename, driver=ArchGDAL.getdriver("ENVI"), width=x_size_px,
     height=y_size_px, nbands=output_bands, dtype=Float32)
-    ArchGDAL.setproj!(outDataset, ArchGDAL.toWKT(ArchGDAL.importEPSG(4326)))
+    ArchGDAL.setproj!(outDataset, ArchGDAL.toWKT(ArchGDAL.importEPSG(args.output_epsg)))
     ArchGDAL.setgeotransform!(outDataset, [min_x, args.target_resolution[1], 0, max_y, 0, args.target_resolution[2]])
 
     @info "Populate target grid."
@@ -140,7 +140,7 @@ function main()
                                 if args.criteria_mode == "distance"
                                     current_crit = dist
                                 else
-                                    current_crit = criteria[closest[1], closest[2]]
+                                    current_crit = criteria[_y, _x]
                                 end
 
                                 if current_crit < best[closest[1], closest[2], 4]
@@ -148,7 +148,7 @@ function main()
                                     best[closest[1], closest[2], 4] = current_crit
                                 end
                             elseif args.criteria_mode == "max"
-                                current_crit = criteria[closest[1], closest[2]]
+                                current_crit = criteria[_y, _x]
                                 if current_crit > best[closest[1], closest[2], 4]
                                     best[closest[1], closest[2], 1:3] = [_x, _y, file_idx]
                                     best[closest[1], closest[2], 4] = current_crit
