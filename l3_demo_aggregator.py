@@ -114,24 +114,54 @@ def main():
             f"\\n\\nThis collection contains L3 Aggregated Mineral Spectral Abundance (ASA), at 0.5 degree resolution, \
             for use in Earth System Models.  ASA has been masked in areas with high vegetation, water, cloud, or urban cover.\
             "
-            nc_ds.createDimension('mineral_bands', int(len(mineral_band_names)))
+            nc_ds.createDimension('bands', int(len(mineral_band_names)))
             nc_ds.createDimension('y', ASA.shape[2])
             nc_ds.createDimension('x', ASA.shape[1])
             daac_converter.add_variable(nc_ds, "ASA", "f4", "Aggregated Mineral Spectral Abundance", None,
-                                        ASA, {"dimensions": ("mineral_bands", "y", "x")})
-            if calc_uncertainty:
-                daac_converter.add_variable(nc_ds, "ASA_unc", "f4", "Aggregated Mineral Spectral Abundance Uncertainty", None,
-                                            ASA_unc, {"dimensions": ("mineral_bands", "y", "x")})
+                                        ASA, {"dimensions": ("bands", "y", "x")})
             daac_converter.add_variable(nc_ds, "sensor_band_parameters/mineral_names", str, "ASA Mineral Band Names", None,
-                                        mineral_band_names, {"dimensions": ("mineral_bands",)})
+                                        mineral_band_names, {"dimensions": ("bands",)})
             
             coordinate_grids = np.meshgrid(ul_edges_x, ul_edges_y)
 
             daac_converter.add_variable(nc_ds, "location/lat", "f4", "latitude", None, coordinate_grids[0], {"dimensions": ("y", "x")})
             daac_converter.add_variable(nc_ds, "location/lon", "f4", "longitude", None, coordinate_grids[1], {"dimensions": ("y", "x")})
 
+            nc_ds.spatial_ref = SA_ds.GetProjection()
+            nc_ds.geotransform = [trans[0], args.aggregate_size, 0, trans[3], 0, args.aggregate_size]
+
             nc_ds.sync()
             nc_ds.close()
+
+            if calc_uncertainty:
+
+                nc_ds = Dataset(args.output_base + '_unc.nc', 'w', clobber=True, format='NETCDF4')
+                daac_converter.makeGlobalAttrBase(nc_ds)
+                nc_ds.title = "EMIT L3 Aggregated Mineral Spectral Abundance Uncertainty 0.5 Deg. V001"
+                nc_ds.summary = nc_ds.summary + \
+                f"\\n\\nThis collection contains L3 Aggregated Mineral Spectral Abundance (ASA) Uncertainty, at 0.5 degree resolution, \
+                for use in Earth System Models.  ASA uncertainty has been masked in areas with high vegetation, water, cloud, or urban cover.\
+                "
+                nc_ds.createDimension('bands', int(len(mineral_band_names)))
+                nc_ds.createDimension('y', ASA.shape[2])
+                nc_ds.createDimension('x', ASA.shape[1])
+
+                daac_converter.add_variable(nc_ds, "ASA_unc", "f4", "Aggregated Mineral Spectral Abundance Uncertainty", None,
+                                            ASA_unc, {"dimensions": ("bands", "y", "x")})
+                daac_converter.add_variable(nc_ds, "sensor_band_parameters/mineral_names", str, "ASA Mineral Band Names", None,
+                                            mineral_band_names, {"dimensions": ("bands",)})
+            
+                coordinate_grids = np.meshgrid(ul_edges_x, ul_edges_y)
+
+                daac_converter.add_variable(nc_ds, "location/lat", "f4", "latitude", None, coordinate_grids[0], {"dimensions": ("y", "x")})
+                daac_converter.add_variable(nc_ds, "location/lon", "f4", "longitude", None, coordinate_grids[1], {"dimensions": ("y", "x")})
+
+                nc_ds.spatial_ref = SA_ds.GetProjection()
+                nc_ds.geotransform = [trans[0], args.aggregate_size, 0, trans[3], 0, args.aggregate_size]
+
+                nc_ds.sync()
+                nc_ds.close()
+
         else:
             driver = gdal.GetDriverByName(args.of)
             driver.Register()
@@ -141,7 +171,7 @@ def main():
             else:
                 outDataset = driver.Create(args.output_base, ASA.shape[2], ASA.shape[1], ASA.shape[0], gdal.GDT_Float32)
             outDataset.SetProjection(SA_ds.GetProjection())
-            outDataset.SetGeoTransform(SA_ds.GetGeoTransform())
+            outDataset.SetGeoTransform([trans[0], args.aggregate_size, 0, trans[3], 0, args.aggregate_size])
             for _b in range(ASA.shape[0]):
                 outDataset.GetRasterBand(_b+1).WriteAsArray(ASA[_b,...])
             del outDataset
@@ -152,7 +182,7 @@ def main():
                 else:
                     outDataset = driver.Create(args.output_base + '_unc', ASA.shape[2], ASA.shape[1], ASA.shape[0], gdal.GDT_Float32)
                 outDataset.SetProjection(SA_ds.GetProjection())
-                outDataset.SetGeoTransform(SA_ds.GetGeoTransform())
+                outDataset.SetGeoTransform([trans[0], args.aggregate_size, 0, trans[3], 0, args.aggregate_size])
                 for _b in range(ASA_unc.shape[0]):
                     outDataset.GetRasterBand(_b+1).WriteAsArray(ASA_unc[_b,...])
                 del outDataset
