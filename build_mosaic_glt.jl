@@ -94,6 +94,9 @@ function main()
 
     @info "Create GLT."
     best = fill(1e12, y_size_px, x_size_px, 4)
+    if args.criteria_mode == "max"
+        best = best .* -1
+    end
     best[..,1:3] .= -9999
 
     max_offset_distance = sqrt(sum(args.target_resolution.^2))*3

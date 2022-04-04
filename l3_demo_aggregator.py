@@ -14,8 +14,61 @@ from matplotlib.patches import Patch
 import numpy as np
 import os
 from emit_utils import daac_converter
+import ray, multiprocessing
 
 from scipy import signal
+import warnings
+warnings.filterwarnings("ignore")
+
+@ray.remote
+def aggregate_single_cell(SA_file: str, fractional_cover_file: str, emit_mineral_uncertainty_file:str, fractional_cover_uncertainty_file:str, mask_file: str, lxpos: int,lypos: int,lssx: int,lssy: int, xind: int, yind: int, mask_band: int, earth_band: int):
+    print(xind,yind)
+    SA_ds = gdal.Open(SA_file, gdal.GA_ReadOnly)
+    fractional_cover_ds = gdal.Open(fractional_cover_file, gdal.GA_ReadOnly)
+
+    calc_uncertainty=False
+    if emit_mineral_uncertainty_file is not None and fractional_cover_uncertainty_file is not None:
+        calc_uncertainty=True
+        SA_unc_ds = gdal.Open(emit_mineral_uncertainty_file, gdal.GA_ReadOnly)
+        fractional_cover_unc_ds = gdal.Open(fractional_cover_uncertainty_file, gdal.GA_ReadOnly)
+
+    SA = SA_ds.ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
+    if np.sum(SA[0,...] == -9999) > SA.shape[1]*SA.shape[2] / 2:
+        if calc_uncertainty:
+            return yind, xind, -9999, -9999
+        else:
+            return yind, xind, -9999, None
+    fractional_cover = fractional_cover_ds.ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
+    if mask_file is not None:
+        mask_ds = gdal.Open(mask_file, gdal.GA_ReadOnly)
+        mask = mask_ds.GetRasterBand(mask_band).ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
+        SA[:, mask == 1] = np.nan
+    
+    SAp = SA / (fractional_cover[earth_band, ...])[np.newaxis, ...]
+    SAp[:,fractional_cover[earth_band,...] < 0.1] = np.nan
+    SAp[:,np.isnan(fractional_cover[earth_band,...])] = np.nan
+
+    # Should really be spatially weighted, but will have minimal effect over 0.5 degrees.
+    lASA = np.nanmean(SAp,axis=(1,2))
+
+    if calc_uncertainty:
+        SA_unc = SA_unc_ds.ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
+        fractional_cover_unc = fractional_cover_unc_ds.ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
+        
+        rel_earth_unc = np.power(fractional_cover_unc[earth_band,...] / fractional_cover[earth_band,...],2)
+        lASA_unc = np.zeros(lASA.shape)
+        for _i in range(SA.shape[0]):
+            unmasked = np.sum(np.isnan(SAp) == False)
+            if lASA[_i] > 0:
+                lASA_unc[_i] = np.sqrt(np.power(lASA[_i] / unmasked,2) * np.nansum(np.power(SA_unc[_i,...] / SA[_i,...],2) + rel_earth_unc ) )
+
+    else:
+        lASA_unc = None
+    del SA_ds, fractional_cover_ds
+    if calc_uncertainty:
+        del SA_unc_ds, fractional_cover_unc_ds
+    return yind, xind, lASA, lASA_unc
+
 
 
 def main():
@@ -30,10 +83,9 @@ def main():
     parser.add_argument('--mask_file', type=str, default=None)
     parser.add_argument('--mask_band', type=int, default=8)
     parser.add_argument('--of',type=str, choices=['GTiff', 'NetCDF', 'png'], default='NetCDF')
-    parser.add_argument('--emit_mineral_uncertainty_file')
-    parser.add_argument('--fractional_cover_uncertainty_file')
     parser.add_argument('--earth_band',type=int,default=2)
     parser.add_argument('--mineral_bands', metavar='\b', nargs='+', type=int, default=[-1,-1,-1])
+    parser.add_argument('--n_cores', type=int, default=-1)
     args = parser.parse_args()
 
     if args.of == 'png' and len(args.mineral_bands) != 3:
@@ -64,7 +116,6 @@ def main():
 
     trans = SA_ds.GetGeoTransform()
 
-    SA = SA[args.mineral_bands,...]
     emit_mineral_file_header = args.emit_mineral_file + '.hdr'
     if os.path.isfile(emit_mineral_file_header):
         mineral_band_names = envi.open(emit_mineral_file_header).metadata['band names']
@@ -73,35 +124,57 @@ def main():
 
     step_size_y = int(round(abs(args.aggregate_size / trans[5])))
     step_size_x = int(round(args.aggregate_size / trans[1]))
-    ul_edges_y = np.arange(0, SA.RasterYSize, step_size_y).astype(int)
-    ul_edges_x = np.arange(0, SA.RasterXSize, step_size_x).astype(int)
+    ul_edges_y = np.arange(0, SA_ds.RasterYSize, step_size_y).astype(int)
+    ul_edges_x = np.arange(0, SA_ds.RasterXSize, step_size_x).astype(int)
 
-    ASA = np.zeros((SAp.shape[0],len(ul_edges_y),len(ul_edges_x)))
-    ASA_unc = np.zeros((SAp.shape[0],len(ul_edges_y),len(ul_edges_x)))
+    ASA = np.zeros((SA_ds.RasterCount,len(ul_edges_y),len(ul_edges_x))) - 9999
+    ASA_unc = np.zeros((SA_ds.RasterCount,len(ul_edges_y),len(ul_edges_x))) - 9999
 
+    rayargs = {'local_mode': args.n_cores == 1}
+    if args.n_cores <= 0:
+        args.n_cores = multiprocessing.cpu_count()
+    rayargs['num_cpus'] = args.n_cores
+    ray.init(**rayargs)
+
+
+
+    jobs = []
     for _y, ypos in enumerate(ul_edges_y):
         for _x, xpos in enumerate(ul_edges_x):
-            SA = SA_ds.ReadAsArray(xpos, ypos, min(step_size_x, SA_ds.RasterXSize - xpos), min(step_size_y, SA_ds.RasterYSize - ypos)).astype(np.float32)
-            fractional_cover = fractional_cover_ds.ReadAsArray(xpos, ypos, min(step_size_x, fractional_cover_ds.RasterXSize - xpos), min(step_size_y, fractional_cover_ds.RasterYSize - ypos)).astype(np.float32)
-            if args.mask_file is not None:
-                mask = mask_ds.GetRasterBand(args.mask_band).ReadAsArray(xpos, ypos, min(step_size_x, mask_ds.RasterXSize - xpos), min(step_size_y, mask_ds.RasterYSize - ypos))
-                SA[:, mask == 1] = np.nan
-            
-            SAp = SA / (fractional_cover[args.earth_band, ...])[np.newaxis, ...]
-            SAp[:,fractional_cover[args.earth_band,...] < 0.1] = np.nan
-            SAp[:,np.isnan(fractional_cover[args.earth_band,...])] = np.nan
+            lssx = int(min(step_size_x, SA_ds.RasterXSize - xpos))
+            lssy = int(min(step_size_y, SA_ds.RasterYSize - ypos))
+            lxpos = int(xpos)
+            lypos = int(ypos)
+            jobs.append(aggregate_single_cell.remote(args.emit_mineral_file, args.fractional_cover_file, args.emit_mineral_uncertainty_file, args.fractional_cover_uncertainty_file, args.mask_file, lxpos, lypos, lssx, lssy, _x, _y, args.mask_band, args.earth_band))
+            #SA = SA_ds.ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
+            #print(np.sum(SA != -9999), SA.shape[1]*SA.shape[2])
+            #if np.sum(SA[0,...] == -9999) > SA.shape[1]*SA.shape[2] / 2:
+            #    continue
+            #fractional_cover = fractional_cover_ds.ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
+            #if args.mask_file is not None:
+            #    mask = mask_ds.GetRasterBand(args.mask_band).ReadAsArray(lxpos,lypos,lssx,lssy)
+            #    SA[:, mask == 1] = np.nan
+            #
+            #SAp = SA / (fractional_cover[args.earth_band, ...])[np.newaxis, ...]
+            #SAp[:,fractional_cover[args.earth_band,...] < 0.1] = np.nan
+            #SAp[:,np.isnan(fractional_cover[args.earth_band,...])] = np.nan
 
-            # Should really be spatially weighted, but will have minimal effect over 0.5 degrees.
-            ASA[:,_y,_x] = np.nanmean(SAp,axis=(1,2))
+            ## Should really be spatially weighted, but will have minimal effect over 0.5 degrees.
+            #ASA[:,_y,_x] = np.nanmean(SAp,axis=(1,2))
 
-            if calc_uncertainty:
-                SA_unc = SA_unc_ds.ReadAsArray(xpos, ypos, min(step_size_x, SA_unc_ds.RasterXSize - xpos), min(step_size_y, SA_unc_ds.RasterYSize - ypos)).astype(np.float32)
-                fractional_cover_unc = fractional_cover_unc_ds.ReadAsArray(xpos, ypos, min(step_size_x, fractional_cover_unc_ds.RasterXSize - xpos), min(step_size_y, fractional_cover_unc_ds.RasterYSize - ypos)).astype(np.float32)
-                
-                rel_earth_unc = np.power(fractional_cover_unc[args.earth_band,...] / fractional_cover[args.earth_band,...],2)
-                for _i in range(ASA.shape[0]):
-                    unmasked = np.sum(np.isnan(SAp) == False)
-                    ASA_unc[_i,...] = np.sqrt(np.power(ASA[_i,...] / unmasked,2) * np.nansum(np.power(SA_unc[_i,...] / SA[_i,...],2) + rel_earth_unc ) )
+            #if calc_uncertainty:
+            #    SA_unc = SA_unc_ds.ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
+            #    fractional_cover_unc = fractional_cover_unc_ds.ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
+            #    
+            #    rel_earth_unc = np.power(fractional_cover_unc[args.earth_band,...] / fractional_cover[args.earth_band,...],2)
+            #    for _i in range(ASA.shape[0]):
+            #        unmasked = np.sum(np.isnan(SAp) == False)
+            #        ASA_unc[_i,...] = np.sqrt(np.power(ASA[_i,...] / unmasked,2) * np.nansum(np.power(SA_unc[_i,...] / SA[_i,...],2) + rel_earth_unc ) )
+    rreturn = [ray.get(jid) for jid in jobs]
+    for _y, _x, lASA, lASAu in rreturn:
+        ASA[:,_y,_x] = lASA
+        if lASAu is not None:
+            ASA_unc[:,_y,_x] = lASAu
 
 
     if args.of != 'png':
@@ -115,8 +188,8 @@ def main():
             for use in Earth System Models.  ASA has been masked in areas with high vegetation, water, cloud, or urban cover.\
             "
             nc_ds.createDimension('mineral_bands', int(len(mineral_band_names)))
-            nc_ds.createDimension('y', ASA.shape[2])
-            nc_ds.createDimension('x', ASA.shape[1])
+            nc_ds.createDimension('y', ASA.shape[1])
+            nc_ds.createDimension('x', ASA.shape[2])
             daac_converter.add_variable(nc_ds, "ASA", "f4", "Aggregated Mineral Spectral Abundance", None,
                                         ASA, {"dimensions": ("mineral_bands", "y", "x")})
             if calc_uncertainty:
@@ -137,24 +210,24 @@ def main():
             driver.Register()
 
             if args.of == 'GTiff':
-                outDataset = driver.Create(args.output_base + '.tif', ASA.shape[2], ASA.shape[1], ASA.shape[0], gdal.GDT_Float32, options=['COMPRESS==LZW'])
+                outDataset = driver.Create(args.output_base + '.tif', ASA.shape[2], ASA.shape[1], ASA.shape[0], gdal.GDT_Float32, options=['COMPRESS=LZW'])
             else:
                 outDataset = driver.Create(args.output_base, ASA.shape[2], ASA.shape[1], ASA.shape[0], gdal.GDT_Float32)
             outDataset.SetProjection(SA_ds.GetProjection())
             outDataset.SetGeoTransform(SA_ds.GetGeoTransform())
             for _b in range(ASA.shape[0]):
-                outDataset.GetRasterBand(_b+1).WriteAsArray(ASA[_b,...])
+                outDataset.GetRasterBand(_b+1).WriteArray(ASA[_b,...])
             del outDataset
 
             if calc_uncertainty:
                 if args.of == 'GTiff':
-                    outDataset = driver.Create(args.output_base + '_unc.tif', ASA.shape[2], ASA.shape[1], ASA.shape[0], gdal.GDT_Float32, options=['COMPRESS==LZW'])
+                    outDataset = driver.Create(args.output_base + '_unc.tif', ASA.shape[2], ASA.shape[1], ASA.shape[0], gdal.GDT_Float32, options=['COMPRESS=LZW'])
                 else:
                     outDataset = driver.Create(args.output_base + '_unc', ASA.shape[2], ASA.shape[1], ASA.shape[0], gdal.GDT_Float32)
                 outDataset.SetProjection(SA_ds.GetProjection())
                 outDataset.SetGeoTransform(SA_ds.GetGeoTransform())
                 for _b in range(ASA_unc.shape[0]):
-                    outDataset.GetRasterBand(_b+1).WriteAsArray(ASA_unc[_b,...])
+                    outDataset.GetRasterBand(_b+1).WriteArray(ASA_unc[_b,...])
                 del outDataset
 
     else:
