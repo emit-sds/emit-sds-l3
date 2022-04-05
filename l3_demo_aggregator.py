@@ -47,12 +47,15 @@ def aggregate_single_cell(SA_file: str, fractional_cover_file: str, emit_mineral
     SAp = SA / (fractional_cover[earth_band, ...])[np.newaxis, ...]
     SAp[:,fractional_cover[earth_band,...] < 0.1] = np.nan
     SAp[:,np.isnan(fractional_cover[earth_band,...])] = np.nan
+    SA[np.isnan(SAp)] = np.nan
 
     # Should really be spatially weighted, but will have minimal effect over 0.5 degrees.
     lASA = np.nanmean(SAp,axis=(1,2))
 
     if calc_uncertainty:
         SA_unc = SA_unc_ds.ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
+        SA_unc[:,fractional_cover[earth_band,...] < 0.1] = np.nan
+        SA_unc[:,np.isnan(fractional_cover[earth_band,...])] = np.nan
         fractional_cover_unc = fractional_cover_unc_ds.ReadAsArray(lxpos,lypos,lssx,lssy).astype(np.float32)
         
         rel_earth_unc = np.power(fractional_cover_unc[earth_band,...] / fractional_cover[earth_band,...],2)
@@ -60,7 +63,9 @@ def aggregate_single_cell(SA_file: str, fractional_cover_file: str, emit_mineral
         for _i in range(SA.shape[0]):
             unmasked = np.sum(np.isnan(SAp) == False)
             if lASA[_i] > 0:
-                lASA_unc[_i] = np.sqrt(np.power(lASA[_i] / unmasked,2) * np.nansum(np.power(SA_unc[_i,...] / SA[_i,...],2) + rel_earth_unc ) )
+                rel_SA_unc = SA_unc[_i,...] / SA[_i,...]
+                rel_SA_unc[np.isfinite(rel_SA_unc) == False] = np.nan
+                lASA_unc[_i] = np.sqrt(np.power(lASA[_i] / unmasked,2) * np.nansum(rel_SA_unc + rel_earth_unc ) )
 
     else:
         lASA_unc = None
@@ -165,8 +170,8 @@ def main():
             for use in Earth System Models.  ASA has been masked in areas with high vegetation, water, cloud, or urban cover.\
             "
             nc_ds.createDimension('bands', int(len(mineral_band_names)))
-            nc_ds.createDimension('y', ASA.shape[2])
-            nc_ds.createDimension('x', ASA.shape[1])
+            nc_ds.createDimension('y', ASA.shape[1])
+            nc_ds.createDimension('x', ASA.shape[2])
             daac_converter.add_variable(nc_ds, "ASA", "f4", "Aggregated Mineral Spectral Abundance", None,
                                         ASA, {"dimensions": ("bands", "y", "x")})
             daac_converter.add_variable(nc_ds, "sensor_band_parameters/mineral_names", str, "ASA Mineral Band Names", None,
@@ -178,7 +183,7 @@ def main():
             daac_converter.add_variable(nc_ds, "location/lon", "f4", "longitude", None, coordinate_grids[1], {"dimensions": ("y", "x")})
 
             nc_ds.spatial_ref = SA_ds.GetProjection()
-            nc_ds.geotransform = [trans[0], args.aggregate_size, 0, trans[3], 0, args.aggregate_size]
+            nc_ds.geotransform = [trans[0], args.aggregate_size, 0, trans[3], 0, -1*args.aggregate_size]
 
             nc_ds.sync()
             nc_ds.close()
@@ -193,8 +198,8 @@ def main():
                 for use in Earth System Models.  ASA uncertainty has been masked in areas with high vegetation, water, cloud, or urban cover.\
                 "
                 nc_ds.createDimension('bands', int(len(mineral_band_names)))
-                nc_ds.createDimension('y', ASA.shape[2])
-                nc_ds.createDimension('x', ASA.shape[1])
+                nc_ds.createDimension('y', ASA.shape[1])
+                nc_ds.createDimension('x', ASA.shape[2])
 
                 daac_converter.add_variable(nc_ds, "ASA_unc", "f4", "Aggregated Mineral Spectral Abundance Uncertainty", None,
                                             ASA_unc, {"dimensions": ("bands", "y", "x")})
@@ -207,7 +212,7 @@ def main():
                 daac_converter.add_variable(nc_ds, "location/lon", "f4", "longitude", None, coordinate_grids[1], {"dimensions": ("y", "x")})
 
                 nc_ds.spatial_ref = SA_ds.GetProjection()
-                nc_ds.geotransform = [trans[0], args.aggregate_size, 0, trans[3], 0, args.aggregate_size]
+                nc_ds.geotransform = [trans[0], args.aggregate_size, 0, trans[3], 0, -1*args.aggregate_size]
 
                 nc_ds.sync()
                 nc_ds.close()
@@ -221,9 +226,11 @@ def main():
             else:
                 outDataset = driver.Create(args.output_base, ASA.shape[2], ASA.shape[1], ASA.shape[0], gdal.GDT_Float32)
             outDataset.SetProjection(SA_ds.GetProjection())
-            outDataset.SetGeoTransform([trans[0], args.aggregate_size, 0, trans[3], 0, args.aggregate_size])
+            outDataset.SetGeoTransform([trans[0], args.aggregate_size, 0, trans[3], 0, -1*args.aggregate_size])
             for _b in range(ASA.shape[0]):
                 outDataset.GetRasterBand(_b+1).WriteArray(ASA[_b,...])
+                outDataset.GetRasterBand(_b+1).SetNoDataValue(-9999)
+                outDataset.GetRasterBand(_b+1).SetDescription(mineral_band_names[_b])
             del outDataset
 
             if calc_uncertainty:
@@ -232,9 +239,11 @@ def main():
                 else:
                     outDataset = driver.Create(args.output_base + '_unc', ASA.shape[2], ASA.shape[1], ASA.shape[0], gdal.GDT_Float32)
                 outDataset.SetProjection(SA_ds.GetProjection())
-                outDataset.SetGeoTransform([trans[0], args.aggregate_size, 0, trans[3], 0, args.aggregate_size])
+                outDataset.SetGeoTransform([trans[0], args.aggregate_size, 0, trans[3], 0, -1*args.aggregate_size])
                 for _b in range(ASA_unc.shape[0]):
                     outDataset.GetRasterBand(_b+1).WriteArray(ASA_unc[_b,...])
+                    outDataset.GetRasterBand(_b+1).SetNoDataValue(-9999)
+                    outDataset.GetRasterBand(_b+1).SetDescription(mineral_band_names[_b])
                 del outDataset
 
     else:
