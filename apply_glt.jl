@@ -73,7 +73,7 @@ function main()
     initiate_output_datasets([args.output_filename], x_len, y_len, [length(output_bands)], glt_dataset)
 
     results = pmap(line->apply_mosaic_glt_line(line, args.glt_file, args.output_filename, rawspace_files, output_bands,
-                                               line, args), 1:y_len)
+                                               args), 1:y_len)
 
 end
 
@@ -90,18 +90,18 @@ end
     using Filesystem
     include("src/datasets.jl")
 
-    function apply_mosaic_glt_line(line_index::Int64, glt_filename::String, output_filename::String,
-                                   rawspace_files::Array{String}, output_bands: np.array, args)
+    function apply_mosaic_glt_line(line::Int64, glt_filename::String, output_filename::String,
+                                   rawspace_files::Array{String}, output_bands::Array{Int64}, args)
 
         glt_dataset = ArchGDAL.read(glt_filename)
         x_len = ArchGDAL.width(glt_dataset)
         y_len = ArchGDAL.height(glt_dataset)
 
         if line % 100 == 0
-            @info string("Applying line", line_index, "/", x_len)
+            @info string("Applying line", line, "/", x_len)
         end
 
-        img_dat = convert(Array{Float64},ArchGDAL.readraster(glt_filename)[:,line,:])
+        glt_line = convert(Array{Float64},ArchGDAL.readraster(glt_filename)[:,line,:])
         valid_glt = all(glt_line .!= args.glt_nodata_value, dims=2)
 
         if sum(valid_glt) == 0
@@ -135,7 +135,7 @@ end
             end
         end
         outDataset = ArchGDAL.read(output_filename, flags=1)
-        ArchGDAL.write!(outDataset, output_dat, [1:length(output_bands);], 0, line_index-1, x_len, 1)
+        ArchGDAL.write!(outDataset, output_dat, [1:length(output_bands);], 0, line-1, x_len, 1)
         outDataset = nothing
         GC.gc()
 
