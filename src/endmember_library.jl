@@ -1,8 +1,18 @@
-"""
-This code is designed to load in and manage a spectral library.
-
-Written by: Philip G. Brodrick, philip.brodrick@jpl.nasa.gov
-"""
+#  Copyright 2022 California Institute of Technology
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+# Author: Philip G. Brodrick, philip.g.brodrick@jpl.nasa.gov
 
 using DataFrames
 using CSV
@@ -10,6 +20,7 @@ using Interpolations
 using Logging
 using Statistics
 using Plots
+using ModularIndices
 
 function nanargmax(input::Array)
     x = copy(input)
@@ -65,10 +76,13 @@ mutable struct SpectralLibrary
     file_name::String
     class_header_name::String
     spectral_starting_column::Int64
+    truncate_end_columns::Int64
     class_valid_keys
     scale_factor::Float64
     wavelength_regions_ignore
-    SpectralLibrary(file_name::String, class_header_name::String, spectral_starting_column::Int64, class_valid_keys = nothing, scale_factor = 1.0, wavelength_regions_ignore= [[0,440],[1310,1490],[1770,2050],[2440,2880]]) = new(file_name, class_header_name, spectral_starting_column, class_valid_keys, scale_factor, wavelength_regions_ignore)
+    SpectralLibrary(file_name::String, class_header_name::String, spectral_starting_column::Int64, truncate_end_columns::Int64, class_valid_keys = nothing, 
+                    scale_factor = 1.0, wavelength_regions_ignore= [[0,440],[1310,1490],[1770,2050],[2440,2880]]) = 
+                    new(file_name, class_header_name, spectral_starting_column, truncate_end_columns, class_valid_keys, scale_factor, wavelength_regions_ignore)
 
     spectra
     classes
@@ -77,10 +91,27 @@ mutable struct SpectralLibrary
 end
 
 function load_data!(library::SpectralLibrary)
+
     df = DataFrame(CSV.File(library.file_name))
-    library.spectra = Matrix(df[:,library.spectral_starting_column:end])
-    library.classes = convert(Array, df[!,library.class_header_name])
-    library.wavelengths = parse.(Float64, names(df[:,library.spectral_starting_column:end]))
+
+    try
+        library.spectra = Matrix(df[:,library.spectral_starting_column:end-library.truncate_end_columns])
+    catch e
+        throw(ArgumentError("Could not read spectra from endmember library.  Try adjusting spectral_starting_column or truncate_end_columns, or reworking the library."))
+    end
+
+    try
+        library.classes = convert(Array{AbstractString}, df[!,library.class_header_name])
+    catch e
+        throw(ArgumentError("Could not read classes from endmember library.  Try adjusting class_header_name, or reworking the library."))
+    end
+
+    try
+        library.wavelengths = parse.(Float64, names(df[:,library.spectral_starting_column:end-library.truncate_end_columns]))
+    catch e
+        throw(ArgumentError("Could not read wavelengths from endmember library.  Try adjusting class_header_name, or reworking the library."))
+    end
+
 
     wl_order = sortperm(library.wavelengths)
     library.spectra = library.spectra[:,wl_order]
@@ -148,17 +179,15 @@ function brightness_normalize!(library::SpectralLibrary)
 end
 
 function plot_mean_endmembers(endmember_library::SpectralLibrary, output_name::String)
+    plots = []
     for (_u, u) in enumerate(endmember_library.class_valid_keys)
         mean_spectra = mean(endmember_library.spectra[endmember_library.classes .== u,:],dims=1)[:]
-        if _u == 1
-            plot(endmember_library.wavelengths, mean_spectra, label=u)
-        else
-            plot!(endmember_library.wavelengths, mean_spectra, label=u, xlim=[300,3200])
-        end
+        plot!(endmember_library.wavelengths, mean_spectra, label=u, xlim=[300,3200])
     end
     xlabel!("Wavelength [nm]")
     ylabel!("Reflectance")
     xticks!([500, 1000, 1500, 2000, 2500, 3000])
+    plot!(dpi=400)
     savefig(output_name)
 end
 
@@ -166,16 +195,16 @@ function plot_endmembers(endmember_library::SpectralLibrary, output_name::String
 
     for (_u, u) in enumerate(endmember_library.class_valid_keys)
         if _u == 1
-            plot(endmember_library.wavelengths, endmember_library.spectra[endmember_library.classes .== u,:]', lab="", xlim=[300,3200], color=palette(:tab10)[_u],dpi=400)
+            plot(endmember_library.wavelengths, endmember_library.spectra[endmember_library.classes .== u,:]', lab="", xlim=[300,3200], color=palette(:tab10)[Mod(_u)],dpi=400)
         else
-            plot!(endmember_library.wavelengths, endmember_library.spectra[endmember_library.classes .== u,:]', lab="",xlim=[300,3200], color=palette(:tab10)[_u])
+            plot!(endmember_library.wavelengths, endmember_library.spectra[endmember_library.classes .== u,:]', lab="",xlim=[300,3200], color=palette(:tab10)[Mod(_u)])
         end
     end
     xlabel!("Wavelenth [nm]")
     ylabel!("Reflectance")
     xticks!([500, 1000, 1500, 2000, 2500, 3000])
     for (_u, u) in enumerate(endmember_library.class_valid_keys)
-        plot!([1:2],[0,0.3], color=palette(:tab10)[_u], labels=u)
+        plot!([1:2],[0,0.3], color=palette(:tab10)[Mod(_u)], labels=u)
     end
     savefig(output_name)
 end

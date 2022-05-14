@@ -2,11 +2,6 @@ using ArchGDAL
 using GDAL
 
 
-
-
-
-
-
 function set_band_names(filename::String, band_names)
     GC.gc()
     local_ods = GDAL.gdalopen(filename, GDAL.GA_Update)
@@ -78,7 +73,7 @@ function write_results(output_files, output_bands, x_len, y_len, results, args)
         @info "Write complete fractions output"
         output = zeros(y_len, x_len, output_bands[ods_idx]) .- 9999
         for res in results
-            if isnothing(res[5])
+            if isnothing(res[5]) == false
                 output[res[1],res[3], :] = res[5]
             end
         end

@@ -101,114 +101,18 @@ function main()
 
     max_offset_distance = sqrt(sum(args.target_resolution.^2))*3
     pixel_buffer_window = 1
-
-    total_found = 0
-    for (file_idx, igm_file) in enumerate(igm_files)
-        @info "$igm_file"
-        dataset = ArchGDAL.read(igm_file)
-        igm = PermutedDimsArray(ArchGDAL.read(dataset), (2,1,3))
-        if minimum(igm[..,1]) > grid[1,end-1,1] || maximum(igm[..,1]) < grid[1,1,1] ||
-           minimum(igm[..,2]) > grid[1,1,2] || maximum(igm[..,2]) < grid[end-1,1,2]
-            #println(minimum(igm[..,1]), " > ", grid[1,end-1,1], " ", maximum(igm[..,1]), " < ", grid[1,1,1])
-            #println(minimum(igm[..,2]), " > ", grid[1,1,2], " ", maximum(igm[..,2]), " < ", grid[end-1,1,2])
-            continue
-        else
-            println("Entering")
-        end
-        if args.criteria_mode != "distance"
-            criteria_dataset = ArchGDAL.read(criteria_files[file_idx])
-            criteria = PermutedDimsArray(ArchGDAL.read(criteria_dataset, args.criteria_band), (2,1))
-        end
-        for _y=1:size(igm)[1]
-            for _x=1:size(igm)[2]
-                pt = igm[_y,_x,1:2]
-                closest_t = Array{Int64}([round((pt[2] - grid[1,1,2]) / args.target_resolution[2]),
-                                        round((pt[1] - grid[1,1,1]) / args.target_resolution[1])  ]) .+ 1
-
-                closest = zeros(Int64,2)
-                for xbuffer in -pixel_buffer_window:pixel_buffer_window
-                    for ybuffer in -pixel_buffer_window:pixel_buffer_window
-                        closest[1] = closest_t[1] + xbuffer
-                        closest[2] = closest_t[2] + ybuffer
-
-                        
-                        if closest[1] < 1 || closest[2] < 1 || closest[1] > size(grid)[1] || closest[2] > size(grid)[2]
-                            continue
-                        end
-                        dist = sum((grid[closest[1],closest[2],:] - pt).^2)
-
-                        if dist < max_offset_distance
-
-                            if args.criteria_mode in ["distance", "min"]
-                                if args.criteria_mode == "distance"
-                                    current_crit = dist
-                                else
-                                    current_crit = criteria[_y, _x]
-                                end
-
-                                if current_crit < best[closest[1], closest[2], 4]
-                                    best[closest[1], closest[2], 1:3] = [_x, _y, file_idx]
-                                    best[closest[1], closest[2], 4] = current_crit
-                                end
-                            elseif args.criteria_mode == "max"
-                                current_crit = criteria[_y, _x]
-                                if current_crit > best[closest[1], closest[2], 4]
-                                    best[closest[1], closest[2], 1:3] = [_x, _y, file_idx]
-                                    best[closest[1], closest[2], 4] = current_crit
-                                end
-                            end
-                        end
-                    end
-                end
-
-            end
-        end
-    end
-
-    println(total_found, " ", sum(best[..,1] .!= -9999), " ", size(best)[1]*size(best)[2])
-    if args.mosaic == 1
-        output = Array{Int32}(permutedims(best[..,1:3], (2,1,3)))
-    else
-        output = Array{Int32}(permutedims(best[..,1:2], (2,1,3)))
-    end
-    ArchGDAL.write!(outDataset, output, [1:size(output)[end];], 0, 0, size(output)[1], size(output)[2])
-
 end
 
-
-function tap_bounds(to_tap::Float64, res::Float64, type::String)
-
-    mult = 1
-    if to_tap < 0
-        mult = -1
-    end
-    if type == "up" && mult == 1
-        adj = abs(res) - Float64(mod(abs(to_tap), abs(res)))
-    elseif type == "down" && mult == 1
-        adj = -1 * Float64(mod(abs(to_tap), abs(res)))
-    elseif type == "up" && mult == -1
-        adj = -1 * Float64(mod(abs(to_tap), abs(res)))
-    elseif type == "down" && mult == -1
-        adj = abs(res) - Float64(mod(abs(to_tap), abs(res)))
-    else
-        throw(ArgumentError("type must be one of [\"up\",\"down\""))
-    end
-
-    return mult * (abs(to_tap) + adj)
-end
 
 
 function get_bounding_extent_igms(file_list::Array{String}, return_per_file_xy::Bool=false)
     file_min_xy = Array{Float64}(undef,size(file_list)[1],2)
     file_max_xy = Array{Float64}(undef,size(file_list)[1],2)
 
-    for (_f, file) in enumerate(file_list)
-        println(file)
-        dataset = ArchGDAL.read(file)
-        igm = ArchGDAL.read(dataset)
-        println(size(igm))
-        file_min_xy[_f,:] = [minimum(igm[..,1]), minimum(igm[..,2])]
-        file_max_xy[_f,:] = [maximum(igm[..,1]), maximum(igm[..,2])]
+    results = pmap(file_idx->read_igm_bounds(file_idx,file_list), 1:length(file_list))
+    for res in results
+        file_min_xy[res[1],:] = res[2]
+        file_max_xy[res[1],:] = res[3]
     end
 
     min_x = minimum(filter(!isnan,file_min_xy[:,1]))
@@ -224,5 +128,31 @@ function get_bounding_extent_igms(file_list::Array{String}, return_per_file_xy::
 end
 
 
-main()
 
+@everwhere begin
+using ArchGDAL
+using EllipsisNotation
+using DelimitedFiles
+using Logging
+using Statistics
+
+
+function read_igm_bounds(file_idx::Int32, filenames::Array{String})
+
+    dataset = ArchGDAL.read(filenames[file_idx])
+    igm = ArchGDAL.read(dataset)
+    file_min_xy = [minimum(igm[..,1]), minimum(igm[..,2])]
+    file_max_xy = [maximum(igm[..,1]), maximum(igm[..,2])]
+
+    return file_idx, file_min_xy, file_max_xy
+end
+
+
+
+
+
+
+
+
+
+main()

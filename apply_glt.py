@@ -19,8 +19,8 @@ import emit_utils.common_logs
 import emit_utils.file_checks
 import emit_utils.multi_raster_info
 
-#GLT_NODATA_VALUE=-9999
-GLT_NODATA_VALUE=0
+GLT_NODATA_VALUE=-9999
+#GLT_NODATA_VALUE=0
 CRITERIA_NODATA_VALUE=-9999
 
 
@@ -82,6 +82,7 @@ def main():
     for _ind in range(len(rawspace_files)):
         first_file_dataset = gdal.Open(rawspace_files[_ind], gdal.GA_ReadOnly)
         if first_file_dataset is not None:
+            band_names = envi.open(rawspace_files[_ind] + '.hdr').metadata['band names']
             break
 
     if args.band_numbers == -1:
@@ -98,6 +99,10 @@ def main():
                                len(output_bands), gdal.GDT_Float32, options=['INTERLEAVE=BIL'])
     outDataset.SetProjection(glt_dataset.GetProjection())
     outDataset.SetGeoTransform(glt_dataset.GetGeoTransform())
+    for _b in range(1, len(output_bands)+1):
+        outDataset.GetRasterBand(_b).SetNoDataValue(-9999)
+        outDataset.GetRasterBand(_b).SetDescription(band_names[_b-1])
+
     del outDataset
 
     if args.n_cores == -1:
@@ -195,7 +200,7 @@ def apply_mosaic_glt_line(glt_filename: str, output_filename: str, rawspace_file
     #glt_line = glt_dataset.ReadAsArray(0, line_index, glt_dataset.RasterXSize, 1)
     #glt_line = glt[0][:,line_index:line_index+1, :]
 
-    glt_line = np.squeeze(glt[line_index,...]).copy()
+    glt_line = np.squeeze(glt[line_index,...]).copy().astype(int)
     valid_glt = np.all(glt_line != GLT_NODATA_VALUE, axis=-1)
 
     glt_line[valid_glt,1] = np.abs(glt_line[valid_glt,1]) 
