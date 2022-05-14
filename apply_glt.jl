@@ -17,9 +17,9 @@ include("src/datasets.jl")
 
 function main()
     parser = ArgumentParser(prog="Orthorectifier", description="Apply a GLT to a source image to create an orthorectified output")
-    add_argument!(parser, "glt_file")
-    add_argument!(parser, "rawspace_file", help="filename of rawspace source file or, in the case of a mosaic_glt, a text-file list of raw space files")
-    add_argument!(parser, "output_filename")
+    add_argument!(parser, "glt_file", type=String)
+    add_argument!(parser, "rawspace_file", type=String, help="filename of rawspace source file or, in the case of a mosaic_glt, a text-file list of raw space files")
+    add_argument!(parser, "output_filename", type=String)
     add_argument!(parser, "--band_numbers", nargs="+", type=Int64, default=[-1], help="list of 0-based band numbers, or -1 for all")
     add_argument!(parser, "--n_cores", type=Int64, default=-1)
     add_argument!(parser, "--log_file", type=String, default=nothing)
@@ -29,7 +29,7 @@ function main()
     add_argument!(parser, "--redis_password", type=String)
     add_argument!(parser, "--one_based_glt", type=Int64, choices=[0,1], default=0)
     add_argument!(parser, "--mosaic", type=Int64, choices=[0,1], default=0)
-    add_argument!(parser, "--glt_nodata_value", type=Int64, default=-9999)
+    add_argument!(parser, "--glt_nodata_value", type=Int64, default=0)
     args = parse_args(parser)
 
     if isnothing(args.log_file)
@@ -42,7 +42,6 @@ function main()
 
     if args.mosaic == 1
         rawspace_files = readlines(open(args.rawspace_file, "r"))
-        println(rawspace_files)
     else
         rawspace_files = [args.rawspace_file]
     end
@@ -64,20 +63,23 @@ function main()
         end
     end
 
-    if args.band_numbers == -1
-        output_bands = Array(1:ArchGDAL.nraster(first_file_dataset))
+    if args.band_numbers[1] == -1
+        output_bands = convert(Array,1:ArchGDAL.nraster(first_file_dataset))
     else
-        output_bands = Array(1:args.band_numbers)
+        output_bands = convert(Array,args.band_numbers)
     end
 
     initiate_output_datasets([args.output_filename], x_len, y_len, [length(output_bands)], glt_dataset)
 
-    results = pmap(line->apply_mosaic_glt_line(line, args.glt_file, args.output_filename, rawspace_files, output_bands,
-                                               line, args), 1:y_len)
+    #results = pmap(line->apply_mosaic_glt_line(line, args.glt_file, args.output_filename, rawspace_files, output_bands,
+    #                                           args), 1:y_len)
+    for line in 1:y_len
+        apply_mosaic_glt_line(line, args.glt_file, args.output_filename, rawspace_files, output_bands,args)
+    end
 
 end
 
-@everwhere begin
+@everywhere begin
     using ArchGDAL
     using EllipsisNotation
     using Logging
@@ -87,22 +89,22 @@ end
     using LinearAlgebra
     using Combinatorics
     using Random
-    using Filesystem
+    #using Filesystem
     include("src/datasets.jl")
 
     function apply_mosaic_glt_line(line_index::Int64, glt_filename::String, output_filename::String,
-                                   rawspace_files::Array{String}, output_bands: np.array, args)
+                                   rawspace_files::Array{String}, output_bands::Array, args)
 
         glt_dataset = ArchGDAL.read(glt_filename)
         x_len = ArchGDAL.width(glt_dataset)
         y_len = ArchGDAL.height(glt_dataset)
 
-        if line % 100 == 0
-            @info string("Applying line", line_index, "/", x_len)
+        if line_index % 100 == 0
+            @info string("Applying line", line_index, "/", y_len)
         end
 
-        img_dat = convert(Array{Float64},ArchGDAL.readraster(glt_filename)[:,line,:])
-        valid_glt = all(glt_line .!= args.glt_nodata_value, dims=2)
+        glt_line = convert(Array{Int64},ArchGDAL.readraster(glt_filename)[:,line_index,:])
+        valid_glt = all(glt_line .!= args.glt_nodata_value, dims=2)[:]
 
         if sum(valid_glt) == 0
             return
@@ -111,7 +113,7 @@ end
         glt_line[valid_glt, 2] = abs.(glt_line[valid_glt,2])
         glt_line[valid_glt, 1] = abs.(glt_line[valid_glt,1])
         if args.one_based_glt == 0
-            glt_line[valid_glt,:] = glt_line[valid_glt,:] + 1
+            glt_line[valid_glt,:] .+= 1
         end
 
         if args.mosaic == 1
@@ -130,8 +132,13 @@ end
                 end
 
                 if sum(linematch) > 0
-                    output_dat[linematch, 1, :] = convert(Array{Float64}, ArchGDAL.readraster(rawspace_files[_idx])[glt_line[linematch,1], glt_line[linematch,2], output_bands])
+                  #source_raster = ArchGDAL.readraster(rawspace_files[_idx])
+                  println(minimum(glt_line[linematch,1]), " ", maximum(glt_line[linematch,1]), " ", minimum(glt_line[linematch,2]), " ", maximum(glt_line[linematch,2]))
+                  #for _px in 1:length(glt_line[linematch,1])
+                  #  output_dat[_px, 1, :] = convert(Array{Float64}, source_raster[glt_line[linematch,1][_px], glt_line[linematch,2][_px], output_bands])
+                  #end
                 end
+                
             end
         end
         outDataset = ArchGDAL.read(output_filename, flags=1)
