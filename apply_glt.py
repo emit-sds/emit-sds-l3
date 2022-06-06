@@ -84,11 +84,11 @@ def main():
     for _ind in range(len(rawspace_files)):
         first_file_dataset = gdal.Open(rawspace_files[_ind], gdal.GA_ReadOnly)
         if first_file_dataset is not None:
-            if 'band names' in envi.open(rawspace_files[_ind] + '.hdr').metadata.keys():
+            if 'band names' in envi.open(envi_header(rawspace_files[_ind])).metadata.keys():
                 if args.band_numbers != -1:
-                    band_names = [x for _x, x in enumerate(envi.open(rawspace_files[_ind] + '.hdr').metadata['band names']) if _x in args.band_numbers]
+                    band_names = [x for _x, x in enumerate(envi.open(envi_header(rawspace_files[_ind])).metadata['band names']) if _x in args.band_numbers]
                 else:
-                    band_names = envi.open(rawspace_files[_ind] + '.hdr').metadata['band names']
+                    band_names = envi.open(envi_header(rawspace_files[_ind])).metadata['band names']
                 break
             else:
                 band_names = [f'Band {x}' for x in range(first_file_dataset.RasterCount)]
