@@ -14,13 +14,15 @@ import ray
 from typing import List
 import time
 import os
+import multiprocessing
 
 import emit_utils.common_logs
 import emit_utils.file_checks
 import emit_utils.multi_raster_info
+from emit_utils.file_checks import envi_header
 
-#GLT_NODATA_VALUE=-9999
-GLT_NODATA_VALUE=0
+GLT_NODATA_VALUE=-9999
+#GLT_NODATA_VALUE=0
 CRITERIA_NODATA_VALUE=-9999
 
 
@@ -56,12 +58,11 @@ def main():
     emit_utils.common_logs.logtime()
 
     # Do some checks on input raster files
-    emit_utils.file_checks.check_raster_files([args.glt_file], map_space=True)
+    #emit_utils.file_checks.check_raster_files([args.glt_file], map_space=True)
 
     # Open the GLT dataset
     glt_dataset = gdal.Open(args.glt_file, gdal.GA_ReadOnly)
-    #glt_dataset = envi.open(args.glt_file + '.hdr')
-    glt = envi.open(args.glt_file + '.hdr').open_memmap(writeable=False, interleave='bip')
+    glt = envi.open(envi_header(args.glt_file)).open_memmap(writeable=False, interleave='bip')
 
 
     if args.mosaic:
@@ -79,10 +80,20 @@ def main():
     # reading the GLT through, which isn't free
 
 
+    band_names = None
     for _ind in range(len(rawspace_files)):
         first_file_dataset = gdal.Open(rawspace_files[_ind], gdal.GA_ReadOnly)
         if first_file_dataset is not None:
-            break
+            if 'band names' in envi.open(envi_header(rawspace_files[_ind])).metadata.keys():
+                if args.band_numbers != -1:
+                    band_names = [x for _x, x in enumerate(envi.open(envi_header(rawspace_files[_ind])).metadata['band names']) if _x in args.band_numbers]
+                else:
+                    band_names = envi.open(envi_header(rawspace_files[_ind])).metadata['band names']
+                break
+            else:
+                band_names = [f'Band {x}' for x in range(first_file_dataset.RasterCount)]
+                if args.band_numbers != -1:
+                    band_names = [x for _x, x in enumerate(band_names) if _x in args.band_numbers]
 
     if args.band_numbers == -1:
         output_bands = np.arange(first_file_dataset.RasterCount)
@@ -98,6 +109,11 @@ def main():
                                len(output_bands), gdal.GDT_Float32, options=['INTERLEAVE=BIL'])
     outDataset.SetProjection(glt_dataset.GetProjection())
     outDataset.SetGeoTransform(glt_dataset.GetGeoTransform())
+    for _b in range(1, len(output_bands)+1):
+        outDataset.GetRasterBand(_b).SetNoDataValue(-9999)
+        if band_names is not None:
+            outDataset.GetRasterBand(_b).SetDescription(band_names[_b-1])
+
     del outDataset
 
     if args.n_cores == -1:
@@ -186,7 +202,7 @@ def apply_mosaic_glt_line(glt_filename: str, output_filename: str, rawspace_file
 
     logging.basicConfig(format='%(message)s', level=args.log_level, filename=args.log_file)
 
-    glt_dataset = envi.open(glt_filename + '.hdr')
+    glt_dataset = envi.open(envi_header(glt_filename))
     glt = glt_dataset.open_memmap(writeable=False, interleave='bip')
 
     if line_index % 100 == 0:
@@ -195,7 +211,7 @@ def apply_mosaic_glt_line(glt_filename: str, output_filename: str, rawspace_file
     #glt_line = glt_dataset.ReadAsArray(0, line_index, glt_dataset.RasterXSize, 1)
     #glt_line = glt[0][:,line_index:line_index+1, :]
 
-    glt_line = np.squeeze(glt[line_index,...]).copy()
+    glt_line = np.squeeze(glt[line_index,...]).copy().astype(int)
     valid_glt = np.all(glt_line != GLT_NODATA_VALUE, axis=-1)
 
     glt_line[valid_glt,1] = np.abs(glt_line[valid_glt,1]) 
@@ -217,7 +233,7 @@ def apply_mosaic_glt_line(glt_filename: str, output_filename: str, rawspace_file
     output_dat = np.zeros((glt.shape[1],len(output_bands)),dtype=np.float32) - 9999
     for _idx in un_file_idx:
         if os.path.isfile(rawspace_files[_idx]):
-            rawspace_dataset = envi.open(rawspace_files[_idx] + '.hdr')
+            rawspace_dataset = envi.open(envi_header(rawspace_files[_idx]))
             rawspace_dat = rawspace_dataset.open_memmap(interleave='bip')
 
             if args.mosaic:
