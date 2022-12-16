@@ -102,11 +102,12 @@ function main()
     max_offset_distance = sqrt(sum(args.target_resolution.^2))*3
     pixel_buffer_window = 1
 
-    total_found = 0
+    lk = ReentrantLock()
     for (file_idx, igm_file) in enumerate(igm_files)
         @info "$igm_file"
         dataset = ArchGDAL.read(igm_file)
         igm = PermutedDimsArray(ArchGDAL.read(dataset), (2,1,3))
+
         if minimum(igm[..,1]) > grid[1,end-1,1] || maximum(igm[..,1]) < grid[1,1,1] ||
            minimum(igm[..,2]) > grid[1,1,2] || maximum(igm[..,2]) < grid[end-1,1,2]
             #println(minimum(igm[..,1]), " > ", grid[1,end-1,1], " ", maximum(igm[..,1]), " < ", grid[1,1,1])
@@ -119,8 +120,8 @@ function main()
             criteria_dataset = ArchGDAL.read(criteria_files[file_idx])
             criteria = PermutedDimsArray(ArchGDAL.read(criteria_dataset, args.criteria_band), (2,1))
         end
-        for _y=1:size(igm)[1]
-            for _x=1:size(igm)[2]
+        Threads.@threads for _y=1:size(igm)[1]
+            Threads.@threads for _x=1:size(igm)[2]
                 pt = igm[_y,_x,1:2]
                 closest_t = Array{Int64}([round((pt[2] - grid[1,1,2]) / args.target_resolution[2]),
                                         round((pt[1] - grid[1,1,1]) / args.target_resolution[1])  ]) .+ 1
@@ -131,7 +132,6 @@ function main()
                         closest[1] = closest_t[1] + xbuffer
                         closest[2] = closest_t[2] + ybuffer
 
-                        
                         if closest[1] < 1 || closest[2] < 1 || closest[1] > size(grid)[1] || closest[2] > size(grid)[2]
                             continue
                         end
@@ -146,16 +146,28 @@ function main()
                                     current_crit = criteria[_y, _x]
                                 end
 
-                                if current_crit < best[closest[1], closest[2], 4]
-                                    best[closest[1], closest[2], 1:3] = [_x, _y, file_idx]
-                                    best[closest[1], closest[2], 4] = current_crit
+                                lock(lk)
+                                try
+                                    if current_crit < best[closest[1], closest[2], 4]
+                                        best[closest[1], closest[2], 1:3] = [_x, _y, file_idx]
+                                        best[closest[1], closest[2], 4] = current_crit
+                                    end
+                                finally
+                                    unlock(lk)
                                 end
+                                
                             elseif args.criteria_mode == "max"
                                 current_crit = criteria[_y, _x]
-                                if current_crit > best[closest[1], closest[2], 4]
-                                    best[closest[1], closest[2], 1:3] = [_x, _y, file_idx]
-                                    best[closest[1], closest[2], 4] = current_crit
+                                lock(lk)
+                                try
+                                    if current_crit > best[closest[1], closest[2], 4]
+                                        best[closest[1], closest[2], 1:3] = [_x, _y, file_idx]
+                                        best[closest[1], closest[2], 4] = current_crit
+                                    end
+                                finally
+                                    unlock(lk)
                                 end
+                                
                             end
                         end
                     end
@@ -165,7 +177,7 @@ function main()
         end
     end
 
-    println(total_found, " ", sum(best[..,1] .!= -9999), " ", size(best)[1]*size(best)[2])
+    println(sum(best[..,1] .!= -9999), " ", size(best)[1]*size(best)[2])
     if args.mosaic == 1
         output = Array{Int32}(permutedims(best[..,1:3], (2,1,3)))
     else
