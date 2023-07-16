@@ -3,11 +3,7 @@ import numpy as np
 import pandas as pd
 from osgeo import gdal
 from spectral.io import envi
-import logging
 from typing import List
-import time
-import os
-import multiprocessing
 import emit_utils.file_checks
 
 from emit_utils.file_checks import envi_header
