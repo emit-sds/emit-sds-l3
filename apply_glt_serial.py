@@ -8,6 +8,7 @@ Author: Philip G. Brodrick, philip.brodrick@jpl.nasa.gov
 import argparse
 import numpy as np
 import pandas as pd
+import os
 from osgeo import gdal
 from spectral.io import envi
 import emit_utils.file_checks
@@ -34,17 +35,23 @@ def _write_bil_chunk(dat, outfile, line, shape, dtype = 'float32'):
 
 
 
-def single_image_ortho(img_dat, glt, glt_nodata_value=-9999):
+def single_image_ortho(img_dat, glt, img_ind=None, glt_nodata_value=-9999):
     """Orthorectify a single image
     Args:
         img_dat (array like): raw input image
         glt (array like): glt - 2 band 1-based indexing for output file(x, y)
+        img_ind (int): index of image in glt (if mosaic - otherwise ignored)
         glt_nodata_value (int, optional): Value from glt to ignore. Defaults to 0.
     Returns:
         array like: orthorectified version of img_dat
     """
     outdat = np.zeros((glt.shape[0], glt.shape[1], img_dat.shape[-1])) - 9999
     valid_glt = np.all(glt != glt_nodata_value, axis=-1)
+
+    # Only grab data from the correct image, if this is a mosaic
+    if glt.shape[2] >= 3:
+        valid_glt[glt[:,:,2] != img_ind] = False
+
     glt[valid_glt] -= 1 # account for 1-based indexing
     outdat[valid_glt, :] = img_dat[glt[valid_glt, 1], glt[valid_glt, 0], :]
     return outdat, valid_glt
@@ -56,6 +63,7 @@ def main(input_args=None):
     parser.add_argument('raw_file', type=str,  metavar='RAW', help='path to raw image')   
     parser.add_argument('out_file', type=str, metavar='OUTPUT', help='path to output image')   
     parser.add_argument('--mosaic', action='store_true')
+    parser.add_argument('--run_with_missing_files', action='store_true')
     parser.add_argument('-b', type=int, nargs='+',default=-1)   
     args = parser.parse_args(input_args)
 
@@ -76,19 +84,20 @@ def main(input_args=None):
         rawspace_files = [args.rawspace_file]
 
     ort_img = None
-    for rawfile in rawspace_files:
-        img_ds = envi.open(envi_header(rawfile))
-        if args.b[0] == -1:
-            inds = np.arange(int(img_ds.metadata['bands']))
-        else:
-            inds = np.array(args.b)
-        img_dat = img_ds.open_memmap(writeable=False, interleave='bip')[...,inds].copy()
+    for _rf, rawfile in enumerate(rawspace_files):
+        if os.path.isfile(envi_header(rawfile)) and os.path.isfile(rawfile):
+            img_ds = envi.open(envi_header(rawfile))
+            if args.b[0] == -1:
+                inds = np.arange(int(img_ds.metadata['bands']))
+            else:
+                inds = np.array(args.b)
+            img_dat = img_ds.open_memmap(writeable=False, interleave='bip')[...,inds].copy()
 
-        if ort_img is None:
-            ort_img, _ = single_image_ortho(img_dat, glt)
-        else:
-            ort_img_update, valid_glt = single_image_ortho(img_dat, glt)
-            ort_img[valid_glt, :] = ort_img_update[valid_glt, :]
+            if ort_img is None:
+                ort_img, _ = single_image_ortho(img_dat, glt, img_ind=_rf)
+            else:
+                ort_img_update, valid_glt = single_image_ortho(img_dat, glt, img_ind=_rf)
+                ort_img[valid_glt, :] = ort_img_update[valid_glt, :]
 
     band_names = None
     if 'band names' in envi.open(envi_header(args.raw_file)).metadata.keys():
