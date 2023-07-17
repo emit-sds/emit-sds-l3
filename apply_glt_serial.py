@@ -52,6 +52,9 @@ def single_image_ortho(img_dat, glt, img_ind=None, glt_nodata_value=-9999):
     if glt.shape[2] >= 3:
         valid_glt[glt[:,:,2] != img_ind] = False
 
+    if np.sum(valid_glt) == 0:
+        return outdat, valid_glt
+
     glt[valid_glt] -= 1 # account for 1-based indexing
     outdat[valid_glt, :] = img_dat[glt[valid_glt, 1], glt[valid_glt, 0], :]
     return outdat, valid_glt
@@ -64,28 +67,35 @@ def main(input_args=None):
     parser.add_argument('out_file', type=str, metavar='OUTPUT', help='path to output image')   
     parser.add_argument('--mosaic', action='store_true')
     parser.add_argument('--run_with_missing_files', action='store_true')
-    parser.add_argument('-b', type=int, nargs='+',default=-1)   
+    parser.add_argument('-b', type=int, nargs='+',default=[-1])   
     args = parser.parse_args(input_args)
 
 
     glt_dataset = envi.open(envi_header(args.glt_file))
-    glt = glt_dataset.open_memmap(writeable=False, interleave='bip').copy()
+    glt = glt_dataset.open_memmap(writeable=False, interleave='bip').copy().astype(int)
     del glt_dataset
     glt_dataset = gdal.Open(args.glt_file)
 
     if args.mosaic:
-        rawspace_files = np.squeeze(np.array(pd.read_csv(args.rawspace_file, header=None)))
+        rawspace_files = np.squeeze(np.array(pd.read_csv(args.raw_file, header=None)))
         # TODO: make this check more elegant, should run, catch all files present exception, and proceed
         if args.run_with_missing_files is False:
             emit_utils.file_checks.check_raster_files(rawspace_files, map_space=False)
         # TODO: check that all rawspace files have same number of bands
     else:
-        emit_utils.file_checks.check_raster_files([args.rawspace_file], map_space=False)
-        rawspace_files = [args.rawspace_file]
+        emit_utils.file_checks.check_raster_files([args.raw_file], map_space=False)
+        rawspace_files = [args.raw_file]
 
     ort_img = None
     for _rf, rawfile in enumerate(rawspace_files):
+        print(f'{_rf+1}/{len(rawspace_files)}')
         if os.path.isfile(envi_header(rawfile)) and os.path.isfile(rawfile):
+            
+            # Don't load image data unless we have to
+            if args.mosaic:
+                if np.sum(glt[:,:,2] == _rf+1) == 0:
+                    continue
+
             img_ds = envi.open(envi_header(rawfile))
             if args.b[0] == -1:
                 inds = np.arange(int(img_ds.metadata['bands']))
@@ -94,14 +104,14 @@ def main(input_args=None):
             img_dat = img_ds.open_memmap(writeable=False, interleave='bip')[...,inds].copy()
 
             if ort_img is None:
-                ort_img, _ = single_image_ortho(img_dat, glt, img_ind=_rf)
+                ort_img, _ = single_image_ortho(img_dat, glt, img_ind=_rf+1)
             else:
-                ort_img_update, valid_glt = single_image_ortho(img_dat, glt, img_ind=_rf)
+                ort_img_update, valid_glt = single_image_ortho(img_dat, glt, img_ind=_rf+1)
                 ort_img[valid_glt, :] = ort_img_update[valid_glt, :]
 
     band_names = None
-    if 'band names' in envi.open(envi_header(args.raw_file)).metadata.keys():
-        band_names = np.array(envi.open(envi_header(args.raw_file)).metadata['band names'],dtype=str)[inds].tolist()
+    if 'band names' in envi.open(envi_header(rawspace_files[0])).metadata.keys():
+        band_names = np.array(envi.open(envi_header(rawspace_files[0])).metadata['band names'],dtype=str)[inds].tolist()
 
     # Build output dataset
     driver = gdal.GetDriverByName('ENVI')
