@@ -17,6 +17,8 @@ function main()
     add_argument!(parser, "--criteria_mode", type = String, default = "distance", help = "Band-ordering criteria mode.  Options are min or max (require criteria file), or distance (uses closest point)")
     add_argument!(parser, "--criteria_band", type = Int64, default = 1, help = "band of criteria file to use")
     add_argument!(parser, "--criteria_file_list", type = String, help = "file(s) to be used for criteria")
+    add_argument!(parser, "--mask_file_list", type = String, default = nothing, help = "file(s) to be used for mask")
+    add_argument!(parser, "--mask_band", type = Int64, default = 8, help = "band of mask file to use")
     add_argument!(parser, "--target_extent_ul_lr", type = Float64, nargs=4, help = "extent to build the mosaic of")
     add_argument!(parser, "--mosaic", type = Int32, default=1, help = "treat as a mosaic")
     add_argument!(parser, "--output_epsg", type = Int32, default=4326, help = "epsg to write to destination")
@@ -54,6 +56,14 @@ function main()
         # TODO: add check to make sure criteria file dimensions match igm file dimensions
     end
 
+    if !isnothing(args.mask_file_list)
+        if args.mosaic == 1
+            mask_files = readdlm(args.mask_file_list, String)
+        else
+            mask_files = [args.mask_file_list]
+        end
+    end
+
     if length(args.target_extent_ul_lr) > 0
         ullr = args.target_extent_ul_lr
         min_x = ullr[1]
@@ -78,7 +88,7 @@ function main()
 
     @info "Output Image Size (x,y): $x_size_px, $y_size_px.  Creating output dataset."
     if args.mosaic == 1
-        output_bands = 3
+        output_bands = 4
     else
         output_bands = 2
     end
@@ -93,11 +103,12 @@ function main()
     grid[..,2] = fill(1,y_size_px,x_size_px) .* LinRange(max_y + args.target_resolution[2]/2,max_y + args.target_resolution[2] * (1/2 + y_size_px - 1), y_size_px)[:,[CartesianIndex()]]
 
     @info "Create GLT."
-    best = fill(1e12, y_size_px, x_size_px, 4)
+    best = fill(1e12, y_size_px, x_size_px, 5)
     if args.criteria_mode == "max"
         best = best .* -1
     end
     best[..,1:3] .= -9999
+    best[..,5] .= 0
 
     max_offset_distance = sqrt(sum(args.target_resolution.^2))*3
     pixel_buffer_window = 1
@@ -105,23 +116,37 @@ function main()
     lk = ReentrantLock()
     for (file_idx, igm_file) in enumerate(igm_files)
         @info "$igm_file"
-        dataset = ArchGDAL.read(igm_file)
+        dataset = ArchGDAL.read(igm_file,alloweddrivers =["ENVI"])
         igm = PermutedDimsArray(ArchGDAL.read(dataset), (2,1,3))
 
-        if minimum(igm[..,1]) > grid[1,end-1,1] || maximum(igm[..,1]) < grid[1,1,1] ||
-           minimum(igm[..,2]) > grid[1,1,2] || maximum(igm[..,2]) < grid[end-1,1,2]
-            #println(minimum(igm[..,1]), " > ", grid[1,end-1,1], " ", maximum(igm[..,1]), " < ", grid[1,1,1])
-            #println(minimum(igm[..,2]), " > ", grid[1,1,2], " ", maximum(igm[..,2]), " < ", grid[end-1,1,2])
-            continue
-        else
-            println("Entering")
-        end
+        #if minimum(igm[..,1]) > grid[1,end-1,1] || maximum(igm[..,1]) < grid[1,1,1] ||
+        #   minimum(igm[..,2]) > grid[1,1,2] || maximum(igm[..,2]) < grid[end-1,1,2]
+        #    #println(minimum(igm[..,1]), " > ", grid[1,end-1,1], " ", maximum(igm[..,1]), " < ", grid[1,1,1])
+        #    #println(minimum(igm[..,2]), " > ", grid[1,1,2], " ", maximum(igm[..,2]), " < ", grid[end-1,1,2])
+        #    continue
+        #else
+        #    println("Entering")
+        #end
         if args.criteria_mode != "distance"
-            criteria_dataset = ArchGDAL.read(criteria_files[file_idx])
+            cffi = criteria_files[file_idx]
+            @debug "$cffi"
+            criteria_dataset = ArchGDAL.read(criteria_files[file_idx],alloweddrivers =["ENVI"])
             criteria = PermutedDimsArray(ArchGDAL.read(criteria_dataset, args.criteria_band), (2,1))
         end
+        if !isnothing(args.mask_file_list)
+            mffi = mask_files[file_idx]
+            @debug "$mffi"
+            mask_dataset = ArchGDAL.read(mask_files[file_idx],alloweddrivers =["ENVI"])
+            mask = PermutedDimsArray(ArchGDAL.read(mask_dataset, args.mask_band), (2,1))
+        end
+        
         Threads.@threads for _y=1:size(igm)[1]
             Threads.@threads for _x=1:size(igm)[2]
+                if !isnothing(args.mask_file_list)
+                    if mask[_y, _x] > 0
+                        continue
+                    end
+                end
                 pt = igm[_y,_x,1:2]
                 closest_t = Array{Int64}([round((pt[2] - grid[1,1,2]) / args.target_resolution[2]),
                                         round((pt[1] - grid[1,1,1]) / args.target_resolution[1])  ]) .+ 1
@@ -139,6 +164,7 @@ function main()
 
                         if dist < max_offset_distance
 
+                            best[closest[1], closest[2], 5] += 1
                             if args.criteria_mode in ["distance", "min"]
                                 if args.criteria_mode == "distance"
                                     current_crit = dist
@@ -179,7 +205,7 @@ function main()
 
     println(sum(best[..,1] .!= -9999), " ", size(best)[1]*size(best)[2])
     if args.mosaic == 1
-        output = Array{Int32}(permutedims(best[..,1:3], (2,1,3)))
+        output = Array{Int32}(permutedims(best[..,[1,2,3,5]], (2,1,3)))
     else
         output = Array{Int32}(permutedims(best[..,1:2], (2,1,3)))
     end
