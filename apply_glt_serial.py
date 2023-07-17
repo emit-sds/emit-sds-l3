@@ -1,9 +1,15 @@
+"""
+Apply a (possibly multi-file) per-pixel spatial reference, in serial (rayless).
+
+Author: Philip G. Brodrick, philip.brodrick@jpl.nasa.gov
+"""
+
+
 import argparse
 import numpy as np
 import pandas as pd
 from osgeo import gdal
 from spectral.io import envi
-from typing import List
 import emit_utils.file_checks
 
 from emit_utils.file_checks import envi_header
