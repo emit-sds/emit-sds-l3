@@ -21,6 +21,7 @@ function main()
     add_argument!(parser, "--mask_band", type = Int64, default = 8, help = "band of mask file to use")
     add_argument!(parser, "--target_extent_ul_lr", type = Float64, nargs=4, help = "extent to build the mosaic of")
     add_argument!(parser, "--mosaic", type = Int32, default=1, help = "treat as a mosaic")
+    add_argument!(parser, "--maxlen_file", type = String, default=nothing, help = "max length reference file")
     add_argument!(parser, "--output_epsg", type = Int32, default=4326, help = "epsg to write to destination")
     add_argument!(parser, "--log_file", type = String, default = nothing, help = "log file to write to")
     args = parse_args(parser)
@@ -61,6 +62,14 @@ function main()
             mask_files = readdlm(args.mask_file_list, String)
         else
             mask_files = [args.mask_file_list]
+        end
+    end
+
+    if !isnothing(args.maxlen_file)
+        if args.mosaic == 1
+            maxlen_files = readdlm(args.maxlen_file, String)
+        else
+            maxlen_files = [args.maxlen_file]
         end
     end
 
@@ -139,8 +148,14 @@ function main()
             mask_dataset = ArchGDAL.read(mask_files[file_idx],alloweddrivers =["ENVI"])
             mask = PermutedDimsArray(ArchGDAL.read(mask_dataset, args.mask_band), (2,1))
         end
+        if !isnothing(args.maxlen_file)
+            maxlen_ds = ArchGDAL.readraster(maxlen_files[file_idx],alloweddrivers=["ENVI"])
+            maxlines = size(maxlen_ds)[2]
+        else
+            maxlines = size(igm)[1]
+        end
         
-        Threads.@threads for _y=1:size(igm)[1]
+        Threads.@threads for _y=1:min(size(igm)[1],maxlines)
             Threads.@threads for _x=1:size(igm)[2]
                 if !isnothing(args.mask_file_list)
                     if mask[_y, _x] > 0

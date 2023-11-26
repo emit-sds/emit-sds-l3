@@ -35,7 +35,7 @@ def _write_bil_chunk(dat, outfile, line, shape, dtype = 'float32'):
 
 
 
-def single_image_ortho(img_dat, glt, img_ind=None, glt_nodata_value=-9999):
+def single_image_ortho(img_dat, glt, img_ind=None, glt_nodata_value=0):
     """Orthorectify a single image
     Args:
         img_dat (array like): raw input image
@@ -66,6 +66,7 @@ def main(input_args=None):
     parser.add_argument('raw_file', type=str,  metavar='RAW', help='path to raw image')   
     parser.add_argument('out_file', type=str, metavar='OUTPUT', help='path to output image')   
     parser.add_argument('--mosaic', action='store_true')
+    parser.add_argument('--glt_nodata', type=float, default=0)
     parser.add_argument('--run_with_missing_files', action='store_true')
     parser.add_argument('-b', type=int, nargs='+',default=[-1])   
     args = parser.parse_args(input_args)
@@ -77,7 +78,7 @@ def main(input_args=None):
     glt_dataset = gdal.Open(args.glt_file)
 
     if args.mosaic:
-        rawspace_files = np.squeeze(np.array(pd.read_csv(args.raw_file, header=None)))
+        rawspace_files = [x.strip() for x in open(args.raw_file).readlines()]
         # TODO: make this check more elegant, should run, catch all files present exception, and proceed
         if args.run_with_missing_files is False:
             emit_utils.file_checks.check_raster_files(rawspace_files, map_space=False)
@@ -87,6 +88,7 @@ def main(input_args=None):
         rawspace_files = [args.raw_file]
 
     ort_img = None
+    band_names = None
     for _rf, rawfile in enumerate(rawspace_files):
         print(f'{_rf+1}/{len(rawspace_files)}')
         if os.path.isfile(envi_header(rawfile)) and os.path.isfile(rawfile):
@@ -97,21 +99,21 @@ def main(input_args=None):
                     continue
 
             img_ds = envi.open(envi_header(rawfile))
+            inds = None
             if args.b[0] == -1:
                 inds = np.arange(int(img_ds.metadata['bands']))
             else:
                 inds = np.array(args.b)
             img_dat = img_ds.open_memmap(writeable=False, interleave='bip')[...,inds].copy()
 
-            if ort_img is None:
-                ort_img, _ = single_image_ortho(img_dat, glt, img_ind=_rf+1)
-            else:
-                ort_img_update, valid_glt = single_image_ortho(img_dat, glt, img_ind=_rf+1)
-                ort_img[valid_glt, :] = ort_img_update[valid_glt, :]
+            if band_names is None and 'band names' in envi.open(envi_header(rawfile)).metadata.keys():
+                band_names = np.array(envi.open(envi_header(rawfile)).metadata['band names'],dtype=str)[inds].tolist()
 
-    band_names = None
-    if 'band names' in envi.open(envi_header(rawspace_files[0])).metadata.keys():
-        band_names = np.array(envi.open(envi_header(rawspace_files[0])).metadata['band names'],dtype=str)[inds].tolist()
+            if ort_img is None:
+                ort_img, _ = single_image_ortho(img_dat, glt, img_ind=_rf+1, glt_nodata_value=args.glt_nodata)
+            else:
+                ort_img_update, valid_glt = single_image_ortho(img_dat, glt, img_ind=_rf+1, glt_nodata_value=args.glt_nodata)
+                ort_img[valid_glt, :] = ort_img_update[valid_glt, :]
 
     # Build output dataset
     driver = gdal.GetDriverByName('ENVI')
