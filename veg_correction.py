@@ -39,13 +39,16 @@ def main(input_args=None):
     parser = argparse.ArgumentParser(description="Robust MF")
     parser.add_argument('abun_file', type=str)   
     parser.add_argument('cover_file', type=str)   
-    parser.add_argument('out_file', type=str)   
+    parser.add_argument('--out_file', type=str, default=None)   
     parser.add_argument('--soil_thresh', type=float, default=0.001)   
     parser.add_argument('--coarsened_file', type=str, default=None)   
     parser.add_argument('--resolution', type=float, default=None)   
     parser.add_argument('--data_threshold', type=float, default=None)   
     parser.add_argument('--abun_uncert_file', type=str, default=None)   
     parser.add_argument('--cover_uncert_file', type=str, default=None)   
+    parser.add_argument('--valid_fraction_file', type=str, default=None)   
+    parser.add_argument('--mask_file', type=str, default=None)   
+    parser.add_argument('--thresh_only', action='store_true')   
     args = parser.parse_args(input_args)
 
 
@@ -56,11 +59,15 @@ def main(input_args=None):
 
     abun = abun_ds.open_memmap(interleave='bip').copy()
     cover = cover_ds.open_memmap(interleave='bip')[...,2].copy()
-    abun = abun / cover[:,:,np.newaxis]
+    if args.thresh_only is False:
+        abun = abun / cover[:,:,np.newaxis]
     masked_out = np.any(np.isnan(abun), axis=-1)
     masked_out[np.any(np.isfinite(abun) == False,axis=-1)] = True
     masked_out[cover < args.soil_thresh] = True
     masked_out[np.any(abun == -9999,axis=-1)] = True
+    if args.mask_file is not None:
+        ext_mask = gdal.Open(args.mask_file).ReadAsArray()
+        masked_out[ext_mask == 1] = True
 
     abun[masked_out,:] = -9999
     cover[masked_out] = -9999
@@ -86,17 +93,18 @@ def main(input_args=None):
     driver.Register()
 
     #TODO: careful about output datatypes / format
-    outDataset = driver.Create(args.out_file, abun.shape[1], abun.shape[0],
-                               abun.shape[2], gdal.GDT_Float32, options=['INTERLEAVE=BIL'])
-    outDataset.SetProjection(abun_gdal.GetProjection())
-    outDataset.SetGeoTransform(abun_gdal.GetGeoTransform())
-    for _b in range(1, abun.shape[2]+1):
-        outDataset.GetRasterBand(_b).SetNoDataValue(-9999)
-        if band_names is not None:
-            outDataset.GetRasterBand(_b).SetDescription(band_names[_b-1])
-    del outDataset
+    if args.out_file is not None:
+        outDataset = driver.Create(args.out_file, abun.shape[1], abun.shape[0],
+                                   abun.shape[2], gdal.GDT_Float32, options=['INTERLEAVE=BIL'])
+        outDataset.SetProjection(abun_gdal.GetProjection())
+        outDataset.SetGeoTransform(abun_gdal.GetGeoTransform())
+        for _b in range(1, abun.shape[2]+1):
+            outDataset.GetRasterBand(_b).SetNoDataValue(-9999)
+            if band_names is not None:
+                outDataset.GetRasterBand(_b).SetDescription(band_names[_b-1])
+        del outDataset
 
-    _write_bil_chunk(abun.transpose((0,2,1)), args.out_file, 0, (abun.shape[0], abun.shape[2], abun.shape[1]))
+        _write_bil_chunk(abun.transpose((0,2,1)), args.out_file, 0, (abun.shape[0], abun.shape[2], abun.shape[1]))
 
 
     if args.coarsened_file is not None and args.resolution is not None:
@@ -118,7 +126,6 @@ def main(input_args=None):
                 valid_px = np.sum(masked_out[_y*num_px:(_y+1)*num_px,_x*num_px:(_x+1)*num_px] == False)
                 if args.data_threshold is not None:
                     complete_frac = valid_px / float(num_px**2)
-                    print(complete_frac)
                     if complete_frac < args.data_threshold:
                         continue
                 asa[_y,_x,:] = np.nanmean(abun[_y*num_px:(_y+1)*num_px,_x*num_px:(_x+1)*num_px,:],axis=(0,1))
