@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: isofit
+title: emit-sds-l3
 message: >-
   This codebase provides an interface to executing L3 EMIT
   SDS code.
