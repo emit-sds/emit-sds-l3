@@ -66,7 +66,9 @@ def main():
 
 
     if args.mosaic:
-        rawspace_files = np.squeeze(np.array(pd.read_csv(args.rawspace_file, header=None)))
+        rawspace_files = open(args.rawspace_file,'r').readlines()
+        rawspace_files = [x.strip() for x in rawspace_files]
+
         # TODO: make this check more elegant, should run, catch all files present exception, and proceed
         if args.run_with_missing_files is False:
             emit_utils.file_checks.check_raster_files(rawspace_files, map_space=False)
@@ -211,7 +213,7 @@ def apply_mosaic_glt_line(glt_filename: str, output_filename: str, rawspace_file
     #glt_line = glt_dataset.ReadAsArray(0, line_index, glt_dataset.RasterXSize, 1)
     #glt_line = glt[0][:,line_index:line_index+1, :]
 
-    glt_line = np.squeeze(glt[line_index,...]).copy().astype(int)
+    glt_line = np.squeeze(glt[line_index,...]).copy().astype(int)[...,:3]
     valid_glt = np.all(glt_line != GLT_NODATA_VALUE, axis=-1)
 
     glt_line[valid_glt,1] = np.abs(glt_line[valid_glt,1]) 
