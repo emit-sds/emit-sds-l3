@@ -137,9 +137,19 @@ def main(input_args=None):
                     complete_frac = valid_px / float(num_px**2)
                     if complete_frac < args.data_threshold:
                         continue
-                asa[_y,_x,:] = np.nanmean(abun[_y*num_px:(_y+1)*num_px,_x*num_px:(_x+1)*num_px,:],axis=(0,1))
+
+                spatial_scaling_factor = np.ones((abun[_y*num_px:(_y+1)*num_px,_x*num_px:(_x+1)*num_px,0].shape))
+                latitudes = trans[3] + np.arange(spatial_scaling_factor.shape[0])*trans[5]
+                spatial_scaling_factor *= np.cos(np.deg2rad(latitudes))[:,np.newaxis]
+                if trans[3] > 0:
+                    spatial_scaling_factor /= spatial_scaling_factor[0]
+                else:
+                    spatial_scaling_factor /= spatial_scaling_factor[-1]
+
+                asa[_y,_x,:] = np.nanmean(spatial_scaling_factor[:,:,np.newaxis]*abun[_y*num_px:(_y+1)*num_px,_x*num_px:(_x+1)*num_px,:],axis=(0,1))
                 for _key, key in enumerate(counts.keys()):
                     agg_count[_y,_x,_key] = np.sum(counts[key][_y*num_px:(_y+1)*num_px,_x*num_px:(_x+1)*num_px]) / np.product(abun[_y*num_px:(_y+1)*num_px,_x*num_px:(_x+1)*num_px,0].shape)
+
 
                 if do_uncert:
                     valid_unc = abununcert[_y*num_px:(_y+1)*num_px,_x*num_px:(_x+1)*num_px,:]
