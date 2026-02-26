@@ -97,7 +97,7 @@ def main():
     pred = pred / np.sum(pred,axis=-1)[:,np.newaxis]
     predc = np.cumsum(pred,axis=-1)
 
-    size_classes = np.array([1500, 7500, 375, 187.5, 93.75, 30, 1])
+    size_classes = np.array([1500, 750, 375, 187.5, 93.75, 30, 1])
     ifuns = [interpolate.interp1d(predc[n,:],size_classes) if rfl[n,-100] > 0 else np.array([-1]) for n in range(pred.shape[0])]
     del predc
     median_size = np.array([fun([0.5]) if fun != -1 else np.array([-1]) for fun in ifuns])
