@@ -1,0 +1,152 @@
+{
+  "crs": {
+    "properties": {
+      "name": "urn:ogc:def:crs:OGC:1.3:CRS84"
+    },
+    "type": "name"
+  },
+  "features": [
+    {
+      "geometry": {
+        "coordinates": [
+          [
+            [
+              73.7705968009518,
+              21.318641248272506
+            ],
+            [
+              73.15469476695336,
+              21.768904283408855
+            ],
+            [
+              73.65487540554724,
+              22.34229933956058
+            ],
+            [
+              74.27137401464283,
+              21.890296768251076
+            ],
+            [
+              73.7705968009518,
+              21.318641248272506
+            ]
+          ]
+        ],
+        "type": "Polygon"
+      },
+      "properties": {
+        "Aspect (local surface aspect 0 to 360 degrees clockwise from N)": 186.51,
+        "Cloud + Cirrus Fraction": 0.67,
+        "Cloud Fraction": 0.27,
+        "Clouds & Buffer Fraction": 1.0,
+        "Cosine(i) (apparent local illumination factor based on DEM slope and aspect and to sun vector)": 0.64,
+        "DAAC_index": 1,
+        "Earth-sun distance (AU)": 1.01,
+        "FID_index": 1,
+        "L1B Observation Download": "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL1BRAD.001/EMIT_L1B_RAD_001_20220810T034103_2222203_001/EMIT_L1B_OBS_001_20220810T034103_2222203_001.nc",
+        "L1B Radiance Download": "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL1BRAD.001/EMIT_L1B_RAD_001_20220810T034103_2222203_001/EMIT_L1B_RAD_001_20220810T034103_2222203_001.nc",
+        "L2A Mask Download": "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL2ARFL.001/EMIT_L2A_RFL_001_20220810T034103_2222203_001/EMIT_L2A_MASK_001_20220810T034103_2222203_001.nc",
+        "L2A Reflectance Download": "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL2ARFL.001/EMIT_L2A_RFL_001_20220810T034103_2222203_001/EMIT_L2A_RFL_001_20220810T034103_2222203_001.nc",
+        "L2A Reflectance Uncertainty Download": "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL2ARFL.001/EMIT_L2A_RFL_001_20220810T034103_2222203_001/EMIT_L2A_RFLUNCERT_001_20220810T034103_2222203_001.nc",
+        "Orbit": "22203",
+        "Orbit Segment": "000",
+        "Path length (sensor-to-ground in meters)": 419033.6,
+        "Retrieved AOT Median": 0.0,
+        "Retrieved Ele. Median": 3.17,
+        "Retrieved WV Median": 0.24,
+        "Screened Onboard Fraction": 0.0,
+        "Slope (local surface slope as derived from DEM in degrees)": 9.0,
+        "Solar phase (degrees between to-sensor and to-sun vectors in principal plane)": 44.61,
+        "To-sensor azimuth (0 to 360 degrees CW from N)": 42.57,
+        "To-sensor zenith (0 to 90 degrees from zenith)": 8.28,
+        "To-sun azimuth (0 to 360 degrees CW from N)": 87.7,
+        "To-sun zenith (0 to 90 degrees from zenith)": 49.77,
+        "Total Cloud Fraction": 1.0,
+        "UTC Time (decimal hours for mid-line pixels)": 3.69,
+        "dcid": "1344041711",
+        "end_time": "2022-08-10T03:41:15Z",
+        "fid": "emit20220810t034103_o22203_s000",
+        "start_time": "2022-08-10T03:41:03Z",
+        "style": {
+          "color": "#0000FF",
+          "fillColor": "#0000FF",
+          "opacity": 1,
+          "weight": 1
+        }
+      },
+      "type": "Feature"
+    },
+    {
+      "geometry": {
+        "coordinates": [
+          [
+            [
+              74.27176504998664,
+              21.890704351505086
+            ],
+            [
+              73.65529306321001,
+              22.342751379374064
+            ],
+            [
+              74.16009691847209,
+              22.91431467926068
+            ],
+            [
+              74.77694550646666,
+              22.46003451348597
+            ],
+            [
+              74.27176504998664,
+              21.890704351505086
+            ]
+          ]
+        ],
+        "type": "Polygon"
+      },
+      "properties": {
+        "Aspect (local surface aspect 0 to 360 degrees clockwise from N)": 209.18,
+        "Cloud + Cirrus Fraction": 0.99,
+        "Cloud Fraction": 0.11,
+        "Clouds & Buffer Fraction": 1.0,
+        "Cosine(i) (apparent local illumination factor based on DEM slope and aspect and to sun vector)": 0.64,
+        "DAAC_index": 2,
+        "Earth-sun distance (AU)": 1.01,
+        "FID_index": 2,
+        "L1B Observation Download": "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL1BRAD.001/EMIT_L1B_RAD_001_20220810T034115_2222203_002/EMIT_L1B_OBS_001_20220810T034115_2222203_002.nc",
+        "L1B Radiance Download": "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL1BRAD.001/EMIT_L1B_RAD_001_20220810T034115_2222203_002/EMIT_L1B_RAD_001_20220810T034115_2222203_002.nc",
+        "L2A Mask Download": "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL2ARFL.001/EMIT_L2A_RFL_001_20220810T034115_2222203_002/EMIT_L2A_MASK_001_20220810T034115_2222203_002.nc",
+        "L2A Reflectance Download": "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL2ARFL.001/EMIT_L2A_RFL_001_20220810T034115_2222203_002/EMIT_L2A_RFL_001_20220810T034115_2222203_002.nc",
+        "L2A Reflectance Uncertainty Download": "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL2ARFL.001/EMIT_L2A_RFL_001_20220810T034115_2222203_002/EMIT_L2A_RFLUNCERT_001_20220810T034115_2222203_002.nc",
+        "Orbit": "22203",
+        "Orbit Segment": "000",
+        "Path length (sensor-to-ground in meters)": 419005.29,
+        "Retrieved AOT Median": 0.0,
+        "Retrieved Ele. Median": 2.75,
+        "Retrieved WV Median": 0.09,
+        "Screened Onboard Fraction": 0.0,
+        "Slope (local surface slope as derived from DEM in degrees)": 3.77,
+        "Solar phase (degrees between to-sensor and to-sun vectors in principal plane)": 44.13,
+        "To-sensor azimuth (0 to 360 degrees CW from N)": 42.8,
+        "To-sensor zenith (0 to 90 degrees from zenith)": 8.28,
+        "To-sun azimuth (0 to 360 degrees CW from N)": 88.38,
+        "To-sun zenith (0 to 90 degrees from zenith)": 49.24,
+        "Total Cloud Fraction": 1.0,
+        "UTC Time (decimal hours for mid-line pixels)": 3.69,
+        "dcid": "1344041711",
+        "end_time": "2022-08-10T03:41:27Z",
+        "fid": "emit20220810t034115_o22203_s000",
+        "start_time": "2022-08-10T03:41:15Z",
+        "style": {
+          "color": "#0000FF",
+          "fillColor": "#0000FF",
+          "opacity": 1,
+          "weight": 1
+        }
+      },
+      "type": "Feature"
+    }
+  ],
+  "name": "aquisitions",
+  "type": "FeatureCollection"
+}
